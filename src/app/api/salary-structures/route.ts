@@ -29,6 +29,8 @@ export const GET = handle(async (req: Request) => {
   return NextResponse.json({ month, rows });
 });
 
+const str = (v: unknown) => String(v ?? "").trim().slice(0, 60);
+
 type RuleIn = { mode?: string; amount?: number; percent?: number };
 const rule = (r?: RuleIn) => {
   const mode = r?.mode === "FIXED" || r?.mode === "PERCENT_OF_EARNED_BASIC" ? r.mode : "NONE";
@@ -42,7 +44,8 @@ export const POST = handle(async (req: Request) => {
   const user = await requireUser("salary.manage");
   const b = await readJson<{
     employeeId?: string; effectiveFrom?: string; basic?: number; hra?: number; otherAllowances?: number;
-    epf?: RuleIn; pt?: RuleIn; tds?: RuleIn; otherDeductions?: number; notes?: string; reason?: string;
+    epf?: RuleIn; pt?: RuleIn; tds?: RuleIn; otherDeductions?: number; collegePaid?: number; notes?: string; reason?: string;
+    statutory?: { uan?: string; pfAccountNo?: string; esiNumber?: string; pran?: string; pan?: string; taxRegime?: string };
   }>(req);
   const employeeId = String(b.employeeId ?? "");
   const effectiveFrom = String(b.effectiveFrom ?? "");
@@ -67,6 +70,11 @@ export const POST = handle(async (req: Request) => {
     pt: rule(b.pt),
     tds: rule(b.tds),
     otherDeductions: Math.round(Math.max(0, Number(b.otherDeductions) || 0) * 100),
+    collegePaid: Math.round(Math.max(0, Number(b.collegePaid) || 0) * 100),
+    statutory: {
+      uan: str(b.statutory?.uan), pfAccountNo: str(b.statutory?.pfAccountNo), esiNumber: str(b.statutory?.esiNumber),
+      pran: str(b.statutory?.pran), pan: str(b.statutory?.pan).toUpperCase(), taxRegime: str(b.statutory?.taxRegime) || "Regular",
+    },
     notes: b.notes,
     createdBy: user.employeeId,
   });

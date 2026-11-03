@@ -59,6 +59,12 @@ const SalaryStructureSchema = new Schema(
     pt: { type: DeductionRule, default: () => ({}) },
     tds: { type: DeductionRule, default: () => ({}) },
     otherDeductions: { type: Number, default: 0, min: 0 },
+    collegePaid: { type: Number, default: 0, min: 0 }, // "Salary to be Paid by College (CS)", paise / month
+    statutory: {
+      uan: String, pfAccountNo: String, esiNumber: String, pran: String,
+      pan: String, // optional override; otherwise PAN is read from OMS employees.panNumber
+      taxRegime: { type: String, default: "Regular" },
+    },
     notes: String,
     createdBy: String,
     supersededAt: Date,
@@ -147,6 +153,8 @@ const PayslipSchema = new Schema(
     runId: Schema.Types.ObjectId,
     s3Key: { type: String, required: true },
     netPay: Number,
+    template: String, // EPF | NO_EPF
+    data: Schema.Types.Mixed, // exact SlipData used for the PDF, preview and email
     generatedBy: String,
     version: { type: Number, default: 1 },
   },

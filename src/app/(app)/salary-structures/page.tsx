@@ -9,7 +9,7 @@ import { useAuth } from "@/components/AuthContext";
 import { Badge, Button, Empty, Field, Input, Modal, Notice, Page, PageHeader, Select, Spinner, Table, Textarea, td, th, tr } from "@/components/ui";
 
 type Rule = { mode: "NONE" | "FIXED" | "PERCENT_OF_EARNED_BASIC"; amount: number; percent: number };
-interface Structure { _id: string; employeeId: string; effectiveFrom: string; basic: number; hra: number; otherAllowances: number; epf: Rule; pt: Rule; tds: Rule; otherDeductions: number; notes?: string; createdBy?: string; createdAt?: string }
+interface Structure { _id: string; employeeId: string; effectiveFrom: string; basic: number; hra: number; otherAllowances: number; epf: Rule; pt: Rule; tds: Rule; otherDeductions: number; collegePaid?: number; statutory?: { uan?: string; pfAccountNo?: string; esiNumber?: string; pran?: string; pan?: string; taxRegime?: string }; notes?: string; createdBy?: string; createdAt?: string }
 interface Row { employee: { id: string; name: string; dept: string; designation: string }; current: Structure | null; versions: number }
 
 const ruleText = (r?: Rule) => !r || r.mode === "NONE" ? "—" : r.mode === "FIXED" ? formatINR(r.amount, { decimals: false }) : `${r.percent}% of earned basic`;
@@ -40,9 +40,12 @@ export default function SalaryStructuresPage() {
       employeeId: r.employee.id, name: r.employee.name, effectiveFrom: month,
       basic: c ? String(c.basic / 100) : "", hra: c ? String(c.hra / 100) : "", otherAllowances: c ? String(c.otherAllowances / 100) : "",
       otherDeductions: c ? String(c.otherDeductions / 100) : "", epf: rr(c?.epf), pt: rr(c?.pt), tds: rr(c?.tds), notes: "", reason: "",
+      collegePaid: c?.collegePaid ? String(c.collegePaid / 100) : "",
+      statutory: { uan: c?.statutory?.uan ?? "", pfAccountNo: c?.statutory?.pfAccountNo ?? "", esiNumber: c?.statutory?.esiNumber ?? "", pran: c?.statutory?.pran ?? "", pan: c?.statutory?.pan ?? "", taxRegime: c?.statutory?.taxRegime ?? "Regular" },
     });
   };
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f!, [k]: v }));
+  const setStat = (k: string, v: string) => setForm((f) => ({ ...f!, statutory: { ...((f!.statutory as object) ?? {}), [k]: v } }));
   const setRule = (k: string, p: string, v: string) => setForm((f) => ({ ...f!, [k]: { ...(f![k] as object), [p]: v } }));
 
   async function save() {
@@ -126,6 +129,21 @@ export default function SalaryStructuresPage() {
               {ruleInput("tds", "TDS")}
               <Field label="Other authorized deductions ₹ / month"><Input type="number" min={0} step="0.01" value={String(form.otherDeductions)} onChange={(e) => set("otherDeductions", e.target.value)} /></Field>
             </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Field label="Salary to be paid by college (CS) ₹ / month" hint="Deducted from what GOG pays; shown on the EPF salary slip."><Input type="number" min={0} step="0.01" value={String(form.collegePaid ?? "")} onChange={(e) => set("collegePaid", e.target.value)} /></Field>
+              <Field label="Tax regime">
+                <select className="h-9 w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 text-xs text-white" value={String((form.statutory as Record<string, string>)?.taxRegime ?? "Regular")} onChange={(e) => setStat("taxRegime", e.target.value)}>
+                  <option>Regular</option><option>New</option><option>Old</option>
+                </select>
+              </Field>
+            </div>
+            <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 pt-1">Statutory details (printed on the EPF salary slip)</div>
+            <div className="grid sm:grid-cols-3 gap-3">
+              {([["uan", "UAN"], ["pfAccountNo", "PF Account No."], ["esiNumber", "ESI Number"], ["pran", "PRAN"], ["pan", "PAN (blank = from OMS)"]] as const).map(([k, l]) => (
+                <Field key={k} label={l}><Input value={String((form.statutory as Record<string, string>)?.[k] ?? "")} onChange={(e) => setStat(k, e.target.value)} /></Field>
+              ))}
+            </div>
+            <p className="text-[10px] text-zinc-500">Salary slip design: if EPF, PT, TDS, other deductions and college amount are all 0 / None → “Without EPF” slip; otherwise the “EPF” slip.</p>
             <Field label="Notes (optional)"><Input value={String(form.notes)} onChange={(e) => set("notes", e.target.value)} /></Field>
             <Field label="Reason for change (required)"><Textarea value={String(form.reason)} onChange={(e) => set("reason", e.target.value)} placeholder="e.g. Annual increment approved by founders" /></Field>
           </div>

@@ -25,7 +25,7 @@ export async function sendFmsMail(o: {
   to: string;
   subject: string;
   html: string;
-  attachments?: { filename: string; content: Buffer; contentType?: string }[];
+  attachments?: { filename: string; content: Buffer; contentType?: string; cid?: string }[];
 }): Promise<{ messageId: string }> {
   if (!isValidRecipient(o.to)) throw new Error(`Invalid recipient ${o.to}`);
   const info = await t().sendMail({ from: `"GoG FMS" <${process.env.SMTP_USER}>`, ...o });

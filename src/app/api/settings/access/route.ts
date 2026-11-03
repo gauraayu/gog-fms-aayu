@@ -25,7 +25,7 @@ export const POST = handle(async (req: Request) => {
   const existing = await FmsAccess.findOne({ employeeId }).lean();
   const role = b.role ?? existing?.role;
   if (!role || !(FMS_ROLES as readonly string[]).includes(role)) throw new HttpError(400, "Valid FMS role required");
-  if (role === "FMS_ADMIN" && user.role !== "FMS_ADMIN") throw new HttpError(403, "Only an FMS Admin can grant FMS_ADMIN");
+  if (role === "FMS_ADMIN") throw new HttpError(400, "The FMS Admin role has been retired — grant FOUNDER instead");
   const active = b.active ?? true;
 
   await FmsAccess.updateOne(

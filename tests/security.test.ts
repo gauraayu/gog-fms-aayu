@@ -40,6 +40,7 @@ test("FMS token: valid, tampered, expired, and OMS-style token rejected", () => 
 test("permission matrix: OMS role grants nothing; FMS_ADMIN always all; overrides apply", () => {
   assert.deepEqual(resolvePermissions("TECH_TEAM"), []);
   assert.deepEqual(resolvePermissions("FMS_ADMIN", { FMS_ADMIN: [] }), ALL_PERMISSIONS);
+  assert.deepEqual(resolvePermissions("FOUNDER", { FOUNDER: [] }), ALL_PERMISSIONS);
   assert.ok(!resolvePermissions("HR").includes("payroll.approve"));
   assert.deepEqual(resolvePermissions("HR", { HR: ["dashboard.view", "bogus"] }), ["dashboard.view"]);
 });

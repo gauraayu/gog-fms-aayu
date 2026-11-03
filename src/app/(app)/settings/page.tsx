@@ -9,7 +9,7 @@ import type { PayrollPolicy } from "@/lib/policy";
 
 interface Access { _id: string; employeeId: string; email: string; name: string; role: string; active: boolean; grantedBy?: string; revokedAt?: string }
 interface S { policy: PayrollPolicy; permissions: Record<string, string[]>; catalog: Record<string, string> }
-const ROLES = ["FMS_ADMIN", "FOUNDER", "HR", "ACCOUNTS"];
+const ROLES = ["FOUNDER", "HR", "ACCOUNTS"];
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function SettingsPage() {
@@ -84,12 +84,12 @@ export default function SettingsPage() {
         </Card>
       ) : (
         <Card title="Permission matrix">
-          <p className="text-[11px] text-zinc-500 mb-3">FMS_ADMIN always has every permission. Changes take effect on the next request.</p>
-          <Table head={<tr><th className={th}>Permission</th>{ROLES.filter((r) => r !== "FMS_ADMIN").map((r) => <th key={r} className={`${th} text-center`}>{r}</th>)}</tr>}>
+          <p className="text-[11px] text-zinc-500 mb-3">Founder always has every permission. Changes take effect on the next request.</p>
+          <Table head={<tr><th className={th}>Permission</th>{ROLES.filter((r) => r !== "FOUNDER").map((r) => <th key={r} className={`${th} text-center`}>{r}</th>)}</tr>}>
             {Object.entries(s.catalog).map(([perm, label]) => (
               <tr key={perm} className={tr}>
                 <td className={td}><div className="text-white">{label}</div><div className="text-[10px] font-mono text-zinc-600">{perm}</div></td>
-                {ROLES.filter((r) => r !== "FMS_ADMIN").map((r) => (
+                {ROLES.filter((r) => r !== "FOUNDER").map((r) => (
                   <td key={r} className={`${td} text-center`}>
                     <input type="checkbox" aria-label={`${r} ${perm}`} checked={perms[r]?.includes(perm) ?? false}
                       onChange={(e) => setPerms((x) => ({ ...x, [r]: e.target.checked ? [...(x[r] ?? []), perm] : (x[r] ?? []).filter((y) => y !== perm) }))} />

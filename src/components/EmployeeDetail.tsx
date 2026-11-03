@@ -154,7 +154,7 @@ export function EmployeeDetail({ employeeId, month, onClose, onChanged }: { empl
                   ))}
                 </Table>
                 <Table head={<tr><th className={th}>Deductions</th><th className={`${th} text-right`}>Amount</th></tr>}>
-                  {[["Loss of Pay", c.deductions.lop], ["EPF", c.deductions.epf], ["PT", c.deductions.pt], ["TDS", c.deductions.tds], ["Penalties", c.deductions.penalties], ["Other", c.deductions.other], ["Total Deductions", c.totalDeductions]].map(([l, v]) => (
+                  {[["Loss of Pay", c.deductions.lop], ["EPF", c.deductions.epf], ["PT", c.deductions.pt], ["TDS", c.deductions.tds], ["Penalties", c.deductions.penalties], ["Other", c.deductions.other], ["Paid by College (CS)", c.deductions.college ?? 0], ["Total Deductions", c.totalDeductions]].map(([l, v]) => (
                     <tr key={l as string} className={tr}><td className={td}>{l}</td><td className={`${td} text-right tabular-nums`}>{formatINR(v as number)}</td></tr>
                   ))}
                 </Table>

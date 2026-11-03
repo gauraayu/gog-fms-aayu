@@ -45,7 +45,7 @@ export const PUT = handle(async (req: Request) => {
     const before = await getPermissionOverrides();
     const clean: Record<string, string[]> = {};
     for (const role of FMS_ROLES) {
-      if (role === "FMS_ADMIN") continue;
+      if (role === "FMS_ADMIN" || role === "FOUNDER") continue; // full-access roles are not editable
       const list = b.permissions[role];
       if (Array.isArray(list)) clean[role] = list.filter((p) => (ALL_PERMISSIONS as string[]).includes(p));
     }

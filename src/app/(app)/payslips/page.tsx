@@ -152,9 +152,14 @@ export default function PayslipsPage() {
                     <td className={`${td} whitespace-nowrap`}>
                       {s && <button onClick={() => openSigned(`/api/payslips/${s._id}/file`).catch((x) => setMsg({ k: "error", t: x.message }))} className="h-8 px-2 rounded-lg border border-zinc-800 text-zinc-300 hover:text-white inline-flex items-center gap-1" title="View payslip PDF"><FileDown size={12} /> PDF</button>}
                       {s && can("payslips.email") && (
-                        <Button variant="outline" className="ml-1 h-8 px-2.5" loading={previewLoading === e.employeeId} onClick={() => openPreview(e.employeeId)}>
-                          {s.email?.status === "Sent" ? <><RotateCw size={12} /> Preview / Resend</> : <><Eye size={12} /> Preview &amp; Send</>}
-                        </Button>
+                        <>
+                          <Button variant="outline" className="ml-1 h-8 px-2.5" loading={previewLoading === e.employeeId} onClick={() => openPreview(e.employeeId)}>
+                            <Eye size={12} /> Preview
+                          </Button>
+                          {s.email?.status === "Sent"
+                            ? <Button variant="outline" className="ml-1 h-8 px-2.5" onClick={() => openPreview(e.employeeId)}><RotateCw size={12} /> Resend</Button>
+                            : <Button className="ml-1 h-8 px-2.5" onClick={() => setBulk([e.employeeId])}><Send size={12} /> Send</Button>}
+                        </>
                       )}
                       {!s && isReady(e) && can("payslips.generate") && <button onClick={() => generate([e.employeeId])} className="h-8 px-2 rounded-lg border border-zinc-800 text-zinc-300 hover:text-white">Generate</button>}
                     </td>
@@ -211,7 +216,7 @@ export default function PayslipsPage() {
 
       {/* Single preview → send */}
       <Modal
-        open={!!preview} onClose={() => setPreview(null)} size="lg" title={preview ? `Email preview — ${preview.employeeName} · ${monthLabel(preview.month)}` : ""}
+        open={!!preview} onClose={() => setPreview(null)} size="xl" title={preview ? `Email preview — ${preview.employeeName} · ${monthLabel(preview.month)}` : ""}
         footer={preview && <>
           <Button variant="outline" onClick={() => setPreview(null)}>Cancel</Button>
           <Button
@@ -229,8 +234,9 @@ export default function PayslipsPage() {
               <div className="rounded-xl border border-zinc-800 px-3 py-2"><div className="text-[9px] font-bold uppercase tracking-widest text-zinc-500">To</div><div className="text-white break-all">{preview.to || "—"}</div><div className="text-[10px] text-zinc-500">No CC</div></div>
               <div className="rounded-xl border border-zinc-800 px-3 py-2"><div className="text-[9px] font-bold uppercase tracking-widest text-zinc-500">Subject</div><div className="text-white">{preview.subject}</div></div>
             </div>
-            <div className="rounded-xl border border-zinc-800 overflow-hidden bg-white">
-              <iframe title="Email body preview" srcDoc={preview.html} sandbox="" className="w-full h-72 border-0" />
+            <div className="text-[10px] text-zinc-500">Exactly what the employee will see in the email (the attached PDF has the same design).</div>
+            <div className="rounded-xl border border-zinc-800 overflow-auto bg-white max-h-[60vh]">
+              <iframe title="Email preview" srcDoc={preview.html} sandbox="" className="w-full border-0 block" style={{ height: 1280, minWidth: 800 }} />
             </div>
             <div className="flex items-center justify-between rounded-xl border border-zinc-800 px-3 py-2 text-xs">
               <span className="text-zinc-300">📎 {preview.attachmentName} <span className="text-zinc-500">(v{preview.version} · net {formatINR(preview.netPay)})</span></span>

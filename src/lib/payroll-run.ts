@@ -266,7 +266,7 @@ export async function transitionEntries(
     if (!policy.confirmed) throw new HttpError(409, "Payroll policy has not been confirmed in Settings yet");
     if (todayIST() < monthEnd(month)) throw new HttpError(409, "The payroll month has not ended yet");
   }
-  if (action === "approve" && run.computedBy === actor.employeeId && actor.role !== "FMS_ADMIN") {
+  if (action === "approve" && run.computedBy === actor.employeeId && !["FOUNDER", "FMS_ADMIN"].includes(actor.role)) {
     throw new HttpError(409, "Maker-checker: the person who calculated payroll cannot approve it");
   }
 
@@ -336,6 +336,7 @@ export async function transitionEntries(
   }
 
   await refreshTotals(run._id);
+
   const scope = ids ? (ids.length === 1 ? `employee ${ids[0]}` : `${moved.length} selected employees`) : `all (${moved.length})`;
   await FmsPayrollRun.updateOne({ _id: run._id }, { $push: { history: { from: t.from[0], to: t.to, by: actor.employeeId, byRole: actor.role, at: new Date(), note: `${t.label} — ${scope}${extra.note ? ` · ${extra.note}` : ""}` } } });
   await audit(actor, `payroll.${action}`, {

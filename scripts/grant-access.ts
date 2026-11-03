@@ -1,5 +1,5 @@
 /**
- * One-time bootstrap: grant FMS_ADMIN to the OMS employee ids in FMS_BOOTSTRAP_ADMIN_IDS.
+ * One-time bootstrap: grant FOUNDER (full access) to the OMS employee ids in FMS_BOOTSTRAP_ADMIN_IDS.
  * Writes ONLY to fms_access / fms_audit_logs. Run: `npm run seed:access` (needs MONGODB_URI).
  * Dry run by default; pass --apply to write.
  */
@@ -19,14 +19,14 @@ async function main() {
       console.log(`✗ ${id}: not found in OMS employees`);
       continue;
     }
-    console.log(`${apply ? "✓ granting" : "• would grant"} FMS_ADMIN → ${emp.id} ${emp.name} <${emp.email}> (OMS role ${emp.role}, ${emp.status})`);
+    console.log(`${apply ? "✓ granting" : "• would grant"} FOUNDER → ${emp.id} ${emp.name} <${emp.email}> (OMS role ${emp.role}, ${emp.status})`);
     if (apply) {
       await FmsAccess.updateOne(
         { employeeId: String(emp.id) },
-        { $set: { email: String(emp.email), name: String(emp.name), role: "FMS_ADMIN", active: true, grantedBy: "BOOTSTRAP" } },
+        { $set: { email: String(emp.email), name: String(emp.name), role: "FOUNDER", active: true, grantedBy: "BOOTSTRAP" } },
         { upsert: true },
       );
-      await FmsAudit.create({ userId: "BOOTSTRAP", userName: "Bootstrap script", userRole: "SYSTEM", action: "access.grant", entity: "fms_access", entityId: String(emp.id), updatedValue: { role: "FMS_ADMIN" }, reason: "Initial FMS admin bootstrap" });
+      await FmsAudit.create({ userId: "BOOTSTRAP", userName: "Bootstrap script", userRole: "SYSTEM", action: "access.grant", entity: "fms_access", entityId: String(emp.id), updatedValue: { role: "FOUNDER" }, reason: "Initial FMS admin bootstrap" });
     }
   }
   await mongoose.disconnect();

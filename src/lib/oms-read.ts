@@ -217,3 +217,28 @@ export async function loadMonthInputs(employeeIds: string[], month: string): Pro
 /** OMS salary-module.ts:85 — holidays that apply to one employee. */
 export const holidaysFor = (hol: MonthInputs["holidays"], location?: string) =>
   hol.filter((h) => h.forAll || !h.collegeIds?.length || (location && h.collegeIds.includes(location))).map((h) => h.date);
+
+/**
+ * Extra OMS details printed on the salary slip (server-only; never returned by any list API).
+ * Bank account number is masked to the last 4 digits.
+ */
+export async function getEmployeePayslipDetails(employeeId: string) {
+  await connectDB();
+  const e = await OmsEmployee.findOne({ id: employeeId, isRemoved: { $in: [true, false, null] } })
+    .select("id name designation current_designation_at_gog dept location joiningDate bankName bank_name accountNumber bank_account_number panNumber")
+    .lean();
+  if (!e) return null;
+  const loc = e.location ? await OmsLocation.findOne({ id: e.location }).select("name shortName").lean() : null;
+  const acct = String(e.accountNumber || e.bank_account_number || "").replace(/\s+/g, "");
+  return {
+    id: String(e.id ?? employeeId),
+    name: String(e.name ?? ""),
+    designation: String(e.designation || e.current_designation_at_gog || ""),
+    department: String(e.dept ?? ""),
+    location: String(loc?.name || loc?.shortName || e.location || ""),
+    joiningDate: e.joiningDate ? String(e.joiningDate).slice(0, 10) : "",
+    bankName: String(e.bankName || e.bank_name || ""),
+    bankAccount: acct ? `${"X".repeat(Math.max(0, Math.min(8, acct.length - 4)))}${acct.slice(-4)}` : "",
+    pan: String(e.panNumber ?? "").toUpperCase(),
+  };
+}

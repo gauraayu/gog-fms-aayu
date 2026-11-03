@@ -1,6 +1,8 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { HttpError } from "./auth";
 
 /**
@@ -29,6 +31,56 @@ function s3(): S3Client {
 }
 const bucket = () => process.env.AWS_BUCKET_NAME as string;
 
+/**
+ * LOCAL STORAGE FALLBACK — if AWS S3 is not configured (FMS_AWS_* / AWS_BUCKET_NAME missing),
+ * files are saved on this computer under ./.fms-storage (override: FMS_LOCAL_STORAGE_DIR).
+ * Active automatically outside production; in production only if FMS_LOCAL_STORAGE=true
+ * (note: Vercel's disk is read-only/temporary, so use real S3 there).
+ */
+const s3Configured = () => !!(process.env.FMS_AWS_ACCESS_KEY_ID && process.env.FMS_AWS_SECRET_ACCESS_KEY && process.env.AWS_BUCKET_NAME);
+export const useLocalStorage = () => !s3Configured() && (process.env.NODE_ENV !== "production" || process.env.FMS_LOCAL_STORAGE === "true");
+const localRoot = () => path.resolve(process.env.FMS_LOCAL_STORAGE_DIR || ".fms-storage");
+function localPath(key: string): string {
+  assertFmsKey(key);
+  const root = localRoot();
+  const p = path.resolve(root, key);
+  if (!p.startsWith(root + path.sep)) throw new HttpError(400, "Invalid storage key");
+  return p;
+}
+function localSecret(): string {
+  const s = process.env.FMS_SESSION_SECRET;
+  if (s && s.length >= 32) return s;
+  if (process.env.NODE_ENV !== "production") return "gog-fms-local-storage-dev-secret";
+  throw new HttpError(503, "FMS_SESSION_SECRET must be set to use local file storage");
+}
+const localSig = (body: string) => createHmac("sha256", localSecret()).update(`fms.file.${body}`).digest("base64url");
+export const LOCAL_FILE_ROUTE = "/api/files/local";
+
+/** Short-lived (5 min) link to a locally stored file — issued only after the caller was authorized. */
+function localDownloadUrl(key: string, fileName?: string, seconds = 300): string {
+  const body = Buffer.from(JSON.stringify({ key, name: fileName ? sanitize(fileName) : undefined, exp: Math.floor(Date.now() / 1000) + Math.min(seconds, 300) }), "utf8").toString("base64url");
+  return `${LOCAL_FILE_ROUTE}?t=${body}.${localSig(body)}`;
+}
+export function verifyLocalToken(token: string | null): { key: string; name?: string } | null {
+  if (!token) return null;
+  const [body, sig] = token.split(".");
+  if (!body || !sig) return null;
+  let expected: string;
+  try { expected = localSig(body); } catch { return null; }
+  const a = Buffer.from(sig), b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const p = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as { key: string; name?: string; exp: number };
+    if (!p.exp || p.exp < Date.now() / 1000) return null;
+    assertFmsKey(p.key);
+    return { key: p.key, name: p.name };
+  } catch { return null; }
+}
+export async function readLocalFile(key: string): Promise<Buffer> {
+  try { return await fs.readFile(localPath(key)); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "File not found in local storage"); throw e; }
+}
+
 export function assertFmsKey(key: string) {
   if (!key || !key.startsWith(PREFIX) || key.includes("..")) throw new HttpError(400, "Invalid storage key");
 }
@@ -53,6 +105,12 @@ export function buildKey(folder: string, fileName: string, contentType: string):
 
 export async function putObject(key: string, body: Buffer, contentType: string) {
   assertFmsKey(key);
+  if (useLocalStorage()) {
+    const p = localPath(key);
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, body);
+    return key;
+  }
   await s3().send(
     new PutObjectCommand({ Bucket: bucket(), Key: key, Body: body, ContentType: contentType, ServerSideEncryption: "AES256" }),
   );
@@ -61,6 +119,7 @@ export async function putObject(key: string, body: Buffer, contentType: string) 
 
 export async function getObjectBuffer(key: string): Promise<Buffer> {
   assertFmsKey(key);
+  if (useLocalStorage()) return readLocalFile(key);
   const out = await s3().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
   const bytes = await out.Body!.transformToByteArray();
   return Buffer.from(bytes);
@@ -68,6 +127,7 @@ export async function getObjectBuffer(key: string): Promise<Buffer> {
 
 export async function signedDownloadUrl(key: string, fileName?: string, seconds = 300): Promise<string> {
   assertFmsKey(key);
+  if (useLocalStorage()) return localDownloadUrl(key, fileName, seconds);
   return getSignedUrl(
     s3(),
     new GetObjectCommand({
