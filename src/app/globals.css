@@ -1,0 +1,31 @@
+/* Design tokens copied from GOG OMS src/app/globals.css (verified in handover §7). */
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #10b981;
+  --color-primary-foreground: #022c22;
+  --color-background: #0a0a0a;
+  --color-foreground: #e4e4e7;
+  --color-surface: #111111;
+  --color-surface-light: #161616;
+  --color-border: #1e1e1e;
+  --color-muted: #71717a;
+  --color-muted-foreground: #a1a1aa;
+  --font-outfit: var(--font-outfit);
+}
+
+body {
+  background: #0a0a0a;
+  color: #e4e4e7;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-thumb { background: #1e1e1e; border-radius: 10px; }
+
+@media (min-width: 1024px) {
+  .desktop-zoom { zoom: 1.1; }
+}
