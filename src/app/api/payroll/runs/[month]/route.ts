@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { can, handle, HttpError, readJson, requireUser } from "@/lib/auth";
 import { FmsPayrollEntry, FmsPayrollRun } from "@/models/fms";
 import { setExcluded, syncRunWithOms, transitionEntries } from "@/lib/payroll-run";
+import { syncPayrollMonth } from "@/lib/sheets-sync";
 import { MONTH_RE } from "@/lib/dates";
 
 export const GET = handle(async (_req: Request, ctx: { params: Promise<{ month: string }> }) => {
@@ -34,5 +35,8 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ month: 
     note: b.note, disbursedOn: b.disbursedOn, reference: b.reference,
     employeeIds: Array.isArray(b.employeeIds) ? b.employeeIds : b.employeeId ? [String(b.employeeId)] : undefined,
   });
-  return NextResponse.json(r);
+  // Approved / Finalized / Disbursed list changed → refresh that month's tab in the Google Sheet (if switched on).
+  // A Google problem never undoes the payroll action; it is returned as a warning and logged.
+  const sheet = r.moved > 0 ? await syncPayrollMonth(month, user).catch((e) => ({ ok: false, month, error: (e as Error).message })) : null;
+  return NextResponse.json({ ...r, sheet });
 });

@@ -23,7 +23,7 @@ export const REPORT_TYPES: Record<string, { label: string; perm: Permission }> =
   "challans": { label: "Statutory Payment Summary (EPF/GST/PT/TDS)", perm: "challans.view" },
 };
 
-export async function buildReport(type: string, p: { month?: string; fy?: string; dept?: string; employeeId?: string; challanType?: string }): Promise<Report> {
+export async function buildReport(type: string, p: { month?: string; fy?: string; dept?: string; employeeId?: string; challanType?: string; statuses?: string[]; withStatus?: boolean }): Promise<Report> {
   await connectDB();
   const entryFilter = (extra: Record<string, unknown>) => ({
     excluded: { $ne: true },
@@ -37,7 +37,7 @@ export async function buildReport(type: string, p: { month?: string; fy?: string
     case "payroll-sheet": {
       if (!p.month) throw new Error("month required");
       // full entries (with the per-day trace, for the WFH count) — amounts are decrypted by FMS
-      const entries = await FmsPayrollEntry.find(entryFilter({ month: p.month })).sort({ "employee.name": 1 }).lean();
+      const entries = await FmsPayrollEntry.find(entryFilter({ month: p.month, ...(p.statuses ? { status: { $in: p.statuses } } : {}) })).sort({ "employee.name": 1 }).lean();
       const ids = entries.map((e) => e.employeeId);
       const [emps, exits, structures] = await Promise.all([
         OmsEmployee.find({ id: { $in: ids } }).select("id joiningDate noticePeriod").lean(),
@@ -51,7 +51,19 @@ export async function buildReport(type: string, p: { month?: string; fy?: string
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const stBy = new Map(structures.map((s: any) => [String(s._id), s]));
       const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      const dmy = (v?: unknown) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v ?? "")); return m ? `${m[3]}-${MON[Number(m[2]) - 1]}-${m[1]}` : ""; };
+      /** OMS dates may be "2025-01-10", "2025-01-10T…", a Date, or "10-01-2025" / "10/01/2025" → 10-Jan-2025 */
+      const dmy = (v?: unknown) => {
+        if (v == null || v === "") return "";
+        const fmt = (y: string, mo: string, d: string) => (Number(mo) >= 1 && Number(mo) <= 12 ? `${d.padStart(2, "0")}-${MON[Number(mo) - 1]}-${y}` : "");
+        if (v instanceof Date) return Number.isNaN(v.getTime()) ? "" : fmt(...(new Date(v.getTime() + 330 * 60000).toISOString().slice(0, 10).split("-") as [string, string, string]));
+        const str = String(v).trim();
+        let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(str);
+        if (m) return fmt(m[1], m[2], m[3]);
+        m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(str);
+        if (m) return fmt(m[3], m[2], m[1]);
+        const t = Date.parse(str);
+        return Number.isNaN(t) ? str : fmt(...(new Date(t + 330 * 60000).toISOString().slice(0, 10).split("-") as [string, string, string]));
+      };
       return {
         title: `Payroll Sheet — ${monthLabel(p.month)}`,
         columns: [
@@ -63,6 +75,7 @@ export async function buildReport(type: string, p: { month?: string; fy?: string
           { key: "grossAfter", label: "Gross Salary after Leave Calculation", money: true }, { key: "toPay", label: "Salary to be Paid", money: true },
           { key: "college", label: "Salary to be paid by College", money: true }, { key: "tds", label: "TDS", money: true },
           { key: "epf", label: "EPF", money: true }, { key: "pt", label: "PT", money: true },
+          ...(p.withStatus ? [{ key: "status", label: "Payroll Status" }] : []),
         ],
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         rows: entries.map((e: any) => {
@@ -90,6 +103,7 @@ export async function buildReport(type: string, p: { month?: string; fy?: string
             tds: d.tds ?? 0,
             epf: d.epf ?? 0,
             pt: d.pt ?? 0,
+            ...(p.withStatus ? { status: e.status ?? "Draft" } : {}),
           };
         }),
       };

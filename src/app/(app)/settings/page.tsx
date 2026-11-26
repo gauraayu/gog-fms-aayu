@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ShieldCheck, UserPlus } from "lucide-react";
+import { ShieldCheck, UserPlus, FileSpreadsheet, ExternalLink } from "lucide-react";
 import { api } from "@/lib/client";
 import { useAuth } from "@/components/AuthContext";
 import { Badge, Button, Card, Field, Input, Modal, Notice, Page, PageHeader, Select, Spinner, Table, Tabs, Textarea, td, th, tr } from "@/components/ui";
@@ -15,7 +15,12 @@ const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"policy" | "salary" | "access" | "perms">("policy");
+  const [tab, setTab] = useState<"policy" | "salary" | "sheets" | "access" | "perms">("policy");
+  const [gs, setGs] = useState<{ enabled: boolean; url: string; serviceAccountEmail: string; credentialsSet: boolean; log: { at: string; month: string; ok: boolean; rows?: number; error?: string; by: string }[] } | null>(null);
+  const [gsLink, setGsLink] = useState("");
+  const [gsOn, setGsOn] = useState(true);
+  const [gsMonth, setGsMonth] = useState("");
+  const [gsBusy, setGsBusy] = useState("");
   const [sd, setSd] = useState<Record<string, string> | null>(null);
   const [s, setS] = useState<S | null>(null);
   const [p, setP] = useState<PayrollPolicy | null>(null);
@@ -29,6 +34,8 @@ export default function SettingsPage() {
   const load = useCallback(() => {
     api<S>("/api/settings").then((d) => { setS(d); setP(d.policy); setPerms(d.permissions); if (d.salaryDefaults) setSd({ epfThreshold: String(d.salaryDefaults.epfThreshold / 100), epfAboveFixed: String(d.salaryDefaults.epfAboveFixed / 100), epfBelowPercent: String(d.salaryDefaults.epfBelowPercent), epfPercentBase: d.salaryDefaults.epfPercentBase, ptDefault: String(d.salaryDefaults.ptDefault / 100), tdsThreshold: String((d.salaryDefaults.tdsThreshold ?? 1000000) / 100), tdsPercent: String(d.salaryDefaults.tdsPercent ?? 2), pfEstablishmentCode: d.salaryDefaults.pfEstablishmentCode ?? "" }); }).catch((e) => setMsg({ k: "error", t: e.message }));
     api<{ rows: Access[] }>("/api/settings/access").then((d) => setAccess(d.rows)).catch(() => {});
+    api<NonNullable<typeof gs>>("/api/google-sheets").then((d) => { setGs(d); setGsLink(d.url); setGsOn(d.enabled || !d.url); }).catch(() => {});
+    api<{ currentMonth: string }>("/api/meta").then((m) => setGsMonth((x) => x || m.currentMonth)).catch(() => {});
   }, []);
   useEffect(load, [load]);
 
@@ -48,7 +55,7 @@ export default function SettingsPage() {
     <Page wide>
       <PageHeader title="Settings" subtitle="Payroll policy, FMS access and the permission matrix. Every change needs a reason and is audited." />
       {msg && <Notice kind={msg.k} onClose={() => setMsg(null)}>{msg.t}</Notice>}
-      <Tabs value={tab} onChange={setTab} items={[{ value: "policy", label: "Payroll Policy" }, { value: "salary", label: "Salary Defaults" }, { value: "access", label: "FMS Access" }, { value: "perms", label: "Permission Matrix" }]} />
+      <Tabs value={tab} onChange={setTab} items={[{ value: "policy", label: "Payroll Policy" }, { value: "salary", label: "Salary Defaults" }, { value: "sheets", label: "Google Sheets" }, { value: "access", label: "FMS Access" }, { value: "perms", label: "Permission Matrix" }]} />
 
       {!s || !p ? <Spinner /> : tab === "policy" ? (
         <Card title="Payroll policy" actions={p.confirmed ? <Badge tone="emerald">Confirmed by {p.confirmedBy}</Badge> : <Badge tone="amber">Not confirmed</Badge>}>
@@ -88,6 +95,63 @@ export default function SettingsPage() {
             <Field label="Reason (required)"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. EPF defaults approved by founders" /></Field>
             <Button loading={busy} disabled={!sd || reason.trim().length < 5} onClick={() => sd && save({ salaryDefaults: { epfThreshold: Math.round(Number(sd.epfThreshold) * 100), epfAboveFixed: Math.round(Number(sd.epfAboveFixed) * 100), epfBelowPercent: Number(sd.epfBelowPercent), epfPercentBase: sd.epfPercentBase, ptDefault: Math.round(Number(sd.ptDefault) * 100), tdsThreshold: Math.round(Number(sd.tdsThreshold) * 100), tdsPercent: Number(sd.tdsPercent), pfEstablishmentCode: sd.pfEstablishmentCode } }, "Salary defaults saved")}>Save</Button>
           </div>
+        </Card>
+      ) : tab === "sheets" ? (
+        <Card title="Google Sheets — payroll copy, one tab per month">
+          <Notice kind="warn">
+            Only employees whose payroll is <b>Approved / Finalized / Disbursed</b> go to the sheet, with the same columns as Payroll → Download Excel / Financial Reports → Monthly Salary Report.
+            The tab of a month is refreshed automatically after every Approve / Finalize / Disburse / Send Back, and with the “Sync to Google Sheet” button on Payroll.
+            Salaries are readable in Google Sheets — share the sheet only with the Founder / Accounts, never “Anyone with the link”. Editing the sheet never changes FMS or OMS.
+          </Notice>
+          <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-[12px] space-y-1">
+            <div className="text-zinc-400">Google service account (in .env.local):{" "}
+              {gs?.credentialsSet ? <Badge tone="emerald">Set</Badge> : <Badge tone="red">Not set</Badge>}
+            </div>
+            {gs?.serviceAccountEmail
+              ? <div className="text-zinc-300">Share your Google Sheet as <b>Editor</b> with: <span className="font-mono text-emerald-300 select-all">{gs.serviceAccountEmail}</span></div>
+              : <div className="text-zinc-500">Add GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY to .env.local and restart FMS.</div>}
+          </div>
+          <div className="mt-4 grid sm:grid-cols-[1fr_auto] gap-3 items-end">
+            <Field label="Google Sheet link"><Input value={gsLink} onChange={(e) => setGsLink(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/…/edit" /></Field>
+            <label className="flex items-center gap-2 text-xs text-zinc-300 h-9"><input type="checkbox" checked={gsOn} onChange={(e) => setGsOn(e.target.checked)} /> Sync automatically</label>
+          </div>
+          <div className="mt-3 grid sm:grid-cols-[1fr_auto] gap-2 items-end">
+            <Field label="Reason (required)"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Payroll sheet for founders" /></Field>
+            <Button loading={gsBusy === "save"} disabled={reason.trim().length < 5} onClick={async () => {
+              setGsBusy("save");
+              try {
+                await api("/api/google-sheets", { method: "PUT", json: { link: gsLink, enabled: gsOn, reason } });
+                setMsg({ k: "ok", t: gsLink ? "Google Sheet saved" : "Google Sheet removed" }); setReason(""); load();
+              } catch (e) { setMsg({ k: "error", t: (e as Error).message }); } finally { setGsBusy(""); }
+            }}>Save</Button>
+          </div>
+          {gs?.url && (
+            <div className="mt-4 flex flex-wrap items-end gap-2">
+              <Field label="Send a month now"><Input type="month" value={gsMonth} onChange={(e) => setGsMonth(e.target.value)} className="w-40" /></Field>
+              <Button variant="outline" loading={gsBusy === "sync"} onClick={async () => {
+                setGsBusy("sync");
+                try {
+                  const r = await api<{ tab: string; rows: number }>("/api/google-sheets", { method: "POST", json: { month: gsMonth } });
+                  setMsg({ k: "ok", t: `Google Sheet updated: tab “${r.tab}” — ${r.rows} employee(s)` }); load();
+                } catch (e) { setMsg({ k: "error", t: (e as Error).message }); load(); } finally { setGsBusy(""); }
+              }}><FileSpreadsheet size={12} /> Sync this month</Button>
+              <a href={gs.url} target="_blank" rel="noreferrer" className="h-9 px-3 rounded-lg border border-zinc-700 text-xs font-semibold text-zinc-200 hover:text-white inline-flex items-center gap-1.5"><ExternalLink size={12} /> Open sheet</a>
+            </div>
+          )}
+          {!!gs?.log.length && (
+            <div className="mt-4">
+              <Table head={<tr><th className={th}>When</th><th className={th}>Month</th><th className={th}>Result</th><th className={th}>By</th></tr>}>
+                {gs.log.map((l, i) => (
+                  <tr key={i} className={tr}>
+                    <td className={`${td} text-[11px] tabular-nums`}>{new Date(l.at).toLocaleString("en-IN")}</td>
+                    <td className={td}>{l.month}</td>
+                    <td className={`${td} text-[11px]`}>{l.ok ? <Badge tone="emerald">{l.rows} employee(s)</Badge> : <span className="text-red-400">{l.error}</span>}</td>
+                    <td className={`${td} text-[11px]`}>{l.by}</td>
+                  </tr>
+                ))}
+              </Table>
+            </div>
+          )}
         </Card>
       ) : tab === "access" ? (
         <Card title="Who can use GOG FMS" actions={<Button onClick={() => setGrant({ employeeId: "", role: "HR", active: true, reason: "" })}><UserPlus size={12} /> Grant access</Button>}>

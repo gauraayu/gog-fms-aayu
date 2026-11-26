@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Send, CheckCircle2, Lock, Banknote, Undo2, Eye, Ban, Download } from "lucide-react";
+import { RefreshCw, Send, CheckCircle2, Lock, Banknote, Undo2, Eye, Ban, Download, FileSpreadsheet, ExternalLink } from "lucide-react";
 import { api } from "@/lib/client";
 import { formatINR } from "@/lib/money";
 import { monthLabel } from "@/lib/dates";
@@ -58,11 +58,13 @@ export default function PayrollPage() {
   const [disbursedOn, setDisbursedOn] = useState("");
   const [reference, setReference] = useState("");
   const [excl, setExcl] = useState<Entry | null>(null);
+  const [gs, setGs] = useState<{ enabled: boolean; url: string } | null>(null);
   const [exclReason, setExclReason] = useState("");
 
   useEffect(() => {
     api<{ currentMonth: string }>("/api/meta").then((m) => setMonth((x) => x || m.currentMonth));
     api<{ runs: Run[] }>("/api/payroll/runs").then((r) => setRuns(r.runs)).catch(() => {});
+    api<{ enabled: boolean; url: string }>("/api/google-sheets").then(setGs).catch(() => {});
   }, []);
 
   const load = useCallback(() => {
@@ -95,7 +97,9 @@ export default function PayrollPage() {
       () => api(`/api/payroll/runs/${month}`, { method: "POST", json: { action, ...(employee ? { employeeIds: [employee.employeeId] } : {}), ...extra } }),
       (r) => {
         const n = (r as { moved?: number })?.moved ?? 0;
-        return employee ? `${a.label}: ${employee.employee?.name ?? employee.employeeId} done` : `${a.label}: ${n} employee(s) done`;
+        const sh = (r as { sheet?: { ok: boolean; skipped?: boolean; rows?: number; error?: string } | null })?.sheet;
+        const sheetNote = !sh || sh.skipped ? "" : sh.ok ? ` · Google Sheet updated (${sh.rows} employee(s))` : ` · ⚠ Google Sheet NOT updated: ${sh.error}`;
+        return (employee ? `${a.label}: ${employee.employee?.name ?? employee.employeeId} done` : `${a.label}: ${n} employee(s) done`) + sheetNote;
       },
     );
   }
@@ -128,6 +132,15 @@ export default function PayrollPage() {
               <a href={`/api/reports?type=payroll-sheet&month=${month}&format=xlsx`} className="h-9 px-3 rounded-lg border border-zinc-700 text-xs font-semibold text-zinc-200 hover:text-white hover:border-zinc-500 inline-flex items-center gap-1.5" title="Excel with all salary columns for this month">
                 <Download size={12} /> Download Excel
               </a>
+            )}
+            {run && gs?.enabled && can("salary.view") && (
+              <>
+                <Button variant="outline" loading={busy === "sheet"} title="Approved / Finalized / Disbursed employees of this month → this month's tab in the Google Sheet"
+                  onClick={() => call("sheet", () => api("/api/google-sheets", { method: "POST", json: { month } }), (r) => { const x = r as { tab?: string; rows?: number }; return `Google Sheet updated: tab “${x.tab}” — ${x.rows ?? 0} employee(s) (Approved / Finalized / Disbursed only)`; })}>
+                  <FileSpreadsheet size={12} /> Sync to Google Sheet
+                </Button>
+                <a href={gs.url} target="_blank" rel="noreferrer" title="Open the Google Sheet" className="h-9 w-9 rounded-lg border border-zinc-700 text-zinc-300 hover:text-white inline-flex items-center justify-center"><ExternalLink size={13} /></a>
+              </>
             )}
             {can("payroll.prepare") && anyOpen && (
               <Button loading={busy === "compute"} onClick={() => call("compute", () => api("/api/payroll/runs", { method: "POST", json: { month } }), () => (run ? "Draft / Under Review employees recalculated from latest OMS data" : "Payroll draft created"))}>
