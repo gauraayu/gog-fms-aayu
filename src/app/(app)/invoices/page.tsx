@@ -5,7 +5,7 @@ import { Upload, FileDown, Pencil, Search, ChevronDown, ChevronRight } from "luc
 import { api, openSigned, qs } from "@/lib/client";
 import { formatINR } from "@/lib/money";
 import { useAuth } from "@/components/AuthContext";
-import { Badge, Button, Empty, Field, Input, KpiCard, Modal, Notice, Page, PageHeader, Select, Spinner, Table, Textarea, td, th, tr } from "@/components/ui";
+import { Badge, Button, Empty, Field, Input, KpiCard, Modal, Notice, Page, PageHeader, Select, Spinner, Table, Textarea, td, th, tr, FileInput } from "@/components/ui";
 
 const STATUSES = ["Draft", "Issued", "Partially Paid", "Paid", "Overdue", "Cancelled"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -145,7 +145,7 @@ export default function InvoicesPage() {
             <Field label="Amount ₹ (pre-tax)"><Input type="number" step="0.01" min={0} name="amount" required /></Field>
             <Field label="Tax amount ₹"><Input type="number" step="0.01" min={0} name="taxAmount" defaultValue={0} /></Field>
           </div>
-          <Field label="Invoice document (PDF/PNG/JPG, ≤10 MB)"><input type="file" name="file" accept="application/pdf,image/png,image/jpeg" className="text-xs text-zinc-400" /></Field>
+          <Field label="Invoice document (PDF/PNG/JPG, ≤10 MB)"><FileInput name="file" accept="application/pdf,image/png,image/jpeg" /></Field>
           <Field label="Notes"><Input name="notes" /></Field>
           <datalist id="clients">{data?.clients.map((c) => <option key={c} value={c} />)}</datalist>
           <datalist id="locs">{data?.locations.map((c) => <option key={c} value={c} />)}</datalist>

@@ -1,6 +1,7 @@
 import { connectDB } from "./db";
 import { FmsSettings } from "@/models/fms";
 import { mergePolicy, type PayrollPolicy } from "./policy";
+import { mergeSalaryDefaults, type SalaryDefaults } from "./salary-structure";
 
 export async function getSetting<T>(key: string): Promise<T | null> {
   await connectDB();
@@ -19,4 +20,9 @@ export async function getPolicy(): Promise<PayrollPolicy> {
 
 export async function getPermissionOverrides(): Promise<Record<string, string[]> | null> {
   return getSetting<Record<string, string[]>>("permissions");
+}
+
+/** Company salary defaults (EPF auto rule, PT default) — Settings → Salary Defaults. */
+export async function getSalaryDefaults(): Promise<SalaryDefaults> {
+  return mergeSalaryDefaults(await getSetting<Partial<SalaryDefaults>>("salaryDefaults"));
 }

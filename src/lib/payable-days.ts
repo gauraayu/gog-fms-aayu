@@ -1,18 +1,18 @@
 /**
  * Payable days in FMS = EXACTLY the OMS calculation.
- * This file only adapts the result of the verbatim OMS function
+ * This file only adapts the result of the OMS rules
  * (`oms-payable-days.ts` → calculatePayableDays) to the shape the FMS payroll
  * engine / UI use. No payable / LOP / penalty rule is decided here.
  */
-import { calculatePayableDays, type PdAttendance, type PdLeave, type PdViolation, type PenaltyItem } from "./oms-payable-days";
+import { calculatePayableDays, type PdAttendance, type PdLeave, type PdViolation, type PdFullAttire, type PenaltyItem, type FineItem } from "./oms-payable-days";
 import type { PayrollPolicy } from "./policy";
 
-export type { PdAttendance, PdLeave, PdViolation };
+export type { PdAttendance, PdLeave, PdViolation, PdFullAttire, FineItem };
 
 export interface FineRec { amount?: number; date?: string; reason?: string }
 export interface MonetaryPenalty { id?: string; date: string; amount: number; reason?: string; source?: string; detail?: string }
 export interface OmsCorrection {
-  id: string; direction?: string; correctionCategory?: string; correctionReason?: string;
+  id: string; direction?: string; /** "HALF" = Half Day Payable */ payableType?: string; correctionCategory?: string; correctionReason?: string;
   correctedByName?: string; correctedByRole?: string; correctedAt?: string; relatedTicketId?: string;
 }
 
@@ -60,12 +60,16 @@ export interface PayableDaysResult {
   basePayableDays: number;
   correctedDays: number;
   hrDeductedDays: number;
-  /** Penalty days OMS actually applied (part of lopDays) */
+  /** Penalty days OMS actually applied (part of lopDays), incl. the part above one day */
   violationDays: number;
+  /** part of violationDays above one day per penalty (Late 5th+ = 2 days) */
+  extraPenaltyDays: number;
+  /** Dress Code / Full Attire % fines of one day's gross (from 04/11/2026) */
+  percentFines: FineItem[];
   violationCount: number;
   pendingPenalties: number;
   activeFlags: number;
-  /** ₹ penalties in paise: OMS monetaryPenaltyTotal (location mismatch) + employees.fines if enabled */
+  /** ₹ penalties in paise: OMS monetaryPenaltyTotal (location mismatch + HR ₹ penalties) + employees.fines if enabled */
   finesPaise: number;
   monetaryPenalties: MonetaryPenalty[];
   penalties: PenaltyItem[];
@@ -97,6 +101,10 @@ export function computePayableDays(input: {
   /** dates of approved holidays that apply to this employee (OMS filter already applied) */
   holidays: string[];
   violations: PdViolation[];
+  /** dates with a pending Late Justification */
+  lateJustificationPending?: Set<string>;
+  /** rejected Full Attire reviews (date = submittedAt IST day) */
+  fullAttire?: PdFullAttire[];
   removed: Map<string, { removedAt?: string; removedByName?: string; removalReason?: string }>;
   corrections: Map<string, OmsCorrection>;
   monetaryPenalties: MonetaryPenalty[];
@@ -114,6 +122,8 @@ export function computePayableDays(input: {
     violations: input.violations,
     removed: input.removed,
     corrections: input.corrections,
+    lateJustificationPending: input.lateJustificationPending,
+    fullAttire: input.fullAttire,
   });
 
   // ₹ penalties exactly as OMS lists them (withMoney: rupees, rounded to paise)
@@ -175,7 +185,9 @@ export function computePayableDays(input: {
     correctedDays: r.correctedDays,
     hrDeductedDays: r.hrDeductedDays,
     violationDays: r.penaltyDays,
-    violationCount: r.penalties.filter((p) => p.deductedDays > 0).length,
+    extraPenaltyDays: r.extraPenaltyDays,
+    percentFines: r.fines,
+    violationCount: r.penalties.filter((p) => p.deductedDays > 0 || !!p.finePercent).length,
     pendingPenalties: r.pendingPenalties,
     activeFlags: r.activeFlags,
     finesPaise,

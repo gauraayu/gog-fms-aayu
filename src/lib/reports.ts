@@ -1,16 +1,20 @@
+import { stripDays } from "./field-crypto";
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import { connectDB } from "./db";
-import { FmsChallan, FmsInvoice, FmsPayrollEntry, FmsPayrollRun } from "@/models/fms";
+import { FmsChallan, FmsInvoice, FmsPayrollEntry, FmsPayrollRun, FmsSalaryStructure } from "@/models/fms";
+import { OmsEmployee, OmsExit } from "@/models/oms-readonly";
 import { fyRange, monthLabel } from "./dates";
 import type { Permission } from "./permissions";
 
-export type Col = { key: string; label: string; money?: boolean };
+export type Col = { key: string; label: string; money?: boolean; num?: boolean };
 export interface Report { title: string; columns: Col[]; rows: Record<string, unknown>[] }
 
 export const REPORT_TYPES: Record<string, { label: string; perm: Permission }> = {
-  "monthly-salary": { label: "Monthly Salary Report", perm: "salary.view" },
+  // Same 17-column sheet as Payroll Management → Download Excel
+  "monthly-salary": { label: "Monthly Salary Report (Payroll Sheet)", perm: "salary.view" },
+  "payroll-sheet": { label: "Payroll Sheet (all salary columns)", perm: "salary.view" },
   "yearly-salary": { label: "Yearly Salary Report", perm: "salary.view" },
   "employee-payroll": { label: "Employee Payroll Summary", perm: "salary.view" },
   "payable-days": { label: "Payable Days, Leave & LOP Report", perm: "payroll.view" },
@@ -30,28 +34,72 @@ export async function buildReport(type: string, p: { month?: string; fy?: string
 
   switch (type) {
     case "monthly-salary":
+    case "payroll-sheet": {
+      if (!p.month) throw new Error("month required");
+      // full entries (with the per-day trace, for the WFH count) — amounts are decrypted by FMS
+      const entries = await FmsPayrollEntry.find(entryFilter({ month: p.month })).sort({ "employee.name": 1 }).lean();
+      const ids = entries.map((e) => e.employeeId);
+      const [emps, exits, structures] = await Promise.all([
+        OmsEmployee.find({ id: { $in: ids } }).select("id joiningDate noticePeriod").lean(),
+        OmsExit.find({ employeeId: { $in: ids } }).select("employeeId lastWorkingDay").lean(),
+        FmsSalaryStructure.find({ _id: { $in: entries.map((e) => e.structureId).filter(Boolean) } }).select("config epf").lean(),
+      ]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const empBy = new Map(emps.map((e: any) => [String(e.id), e]));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const exitBy = new Map(exits.map((x: any) => [String(x.employeeId), String(x.lastWorkingDay ?? "")]));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stBy = new Map(structures.map((s: any) => [String(s._id), s]));
+      const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const dmy = (v?: unknown) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v ?? "")); return m ? `${m[3]}-${MON[Number(m[2]) - 1]}-${m[1]}` : ""; };
+      return {
+        title: `Payroll Sheet — ${monthLabel(p.month)}`,
+        columns: [
+          { key: "name", label: "Name" }, { key: "position", label: "Position" }, { key: "joining", label: "Joining Date" },
+          { key: "exit", label: "Last Date (If exited)" }, { key: "epfApplicable", label: "EPF Applicable?" },
+          { key: "wfh", label: "WFH in Month", num: true }, { key: "leaves", label: "Leaves in Month", num: true },
+          { key: "penalty", label: "Total Penalty in Month", money: true }, { key: "lop", label: "Days of LOP", num: true },
+          { key: "payable", label: "Total Payable Days", num: true }, { key: "salary", label: "Gross Salary", money: true },
+          { key: "grossAfter", label: "Gross Salary after Leave Calculation", money: true }, { key: "toPay", label: "Salary to be Paid", money: true },
+          { key: "college", label: "Salary to be paid by College", money: true }, { key: "tds", label: "TDS", money: true },
+          { key: "epf", label: "EPF", money: true }, { key: "pt", label: "PT", money: true },
+        ],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rows: entries.map((e: any) => {
+          const c = e.calc ?? {}, a = e.attendance ?? {}, d = c.deductions ?? {};
+          const emp = empBy.get(e.employeeId);
+          const exit = emp?.noticePeriod?.lastWorkingDay || exitBy.get(e.employeeId) || "";
+          const st = e.structureId ? stBy.get(String(e.structureId)) : null;
+          const epfOn = st?.config?.epfApplicable ?? (st ? st.epf?.mode && st.epf.mode !== "NONE" : (d.epf ?? 0) > 0);
+          const days: { attendance?: string; kind?: string }[] = Array.isArray(a.days) ? a.days : [];
+          return {
+            name: e.employee?.name ?? e.employeeId,
+            position: e.employee?.designation ?? "",
+            joining: dmy(emp?.joiningDate),
+            exit: dmy(exit),
+            epfApplicable: !st ? "" : epfOn ? "Yes" : "No", // blank = no salary structure yet
+            wfh: days.filter((x) => /^wfh$/i.test(String(x.attendance ?? ""))).length,
+            leaves: Math.round(((a.paidLeaveDays ?? 0) + (a.unpaidLeaveDays ?? 0)) * 100) / 100,
+            penalty: d.penalties ?? 0,
+            lop: c.lopDays ?? a.lopDays ?? 0,
+            payable: c.payableDays ?? a.payableDays ?? 0,
+            salary: c.fullMonthly?.gross ?? 0,
+            grossAfter: c.earnedGross ?? 0,
+            toPay: e.netPay ?? 0,
+            college: d.college ?? 0,
+            tds: d.tds ?? 0,
+            epf: d.epf ?? 0,
+            pt: d.pt ?? 0,
+          };
+        }),
+      };
+    }
     case "payable-days":
     case "penalties": {
       if (!p.month) throw new Error("month required");
-      const entries = await FmsPayrollEntry.find(entryFilter({ month: p.month })).select("-attendance.days").sort({ "employee.name": 1 }).lean();
+      const entries = (await FmsPayrollEntry.find(entryFilter({ month: p.month })).sort({ "employee.name": 1 }).lean()).map(stripDays);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const c = (e: any) => e.calc ?? {};
-      if (type === "monthly-salary") {
-        return {
-          title: `Monthly Salary Report — ${monthLabel(p.month)}`,
-          columns: [
-            { key: "employeeId", label: "Emp ID" }, { key: "name", label: "Name" }, { key: "dept", label: "Dept" },
-            { key: "payable", label: "Payable Days" }, { key: "gross", label: "Gross", money: true }, { key: "lop", label: "LOP", money: true },
-            { key: "epf", label: "EPF", money: true }, { key: "pt", label: "PT", money: true }, { key: "tds", label: "TDS", money: true },
-            { key: "pen", label: "Penalties", money: true }, { key: "net", label: "Net Pay", money: true },
-          ],
-          rows: entries.map((e) => ({
-            employeeId: e.employeeId, name: e.employee?.name, dept: e.employee?.dept, payable: c(e).payableDays,
-            gross: c(e).grossEarnings, lop: c(e).deductions?.lop, epf: c(e).deductions?.epf, pt: c(e).deductions?.pt,
-            tds: c(e).deductions?.tds, pen: c(e).deductions?.penalties, net: e.netPay,
-          })),
-        };
-      }
       if (type === "payable-days") {
         return {
           title: `Payable Days, Leave & LOP — ${monthLabel(p.month)}`,
@@ -89,13 +137,23 @@ export async function buildReport(type: string, p: { month?: string; fy?: string
     case "employee-payroll": {
       if (!p.fy) throw new Error("fy required");
       // Only employees whose payroll is Finalized / Disbursed (per-employee status).
-      const agg = await FmsPayrollEntry.aggregate([
-        { $match: entryFilter({ month: { $in: fyRange(p.fy).months }, status: { $in: ["Finalized", "Disbursed"] } }) },
-        type === "yearly-salary"
-          ? { $group: { _id: "$month", employees: { $sum: 1 }, gross: { $sum: "$calc.grossEarnings" }, deductions: { $sum: "$calc.totalDeductions" }, net: { $sum: "$netPay" } } }
-          : { $group: { _id: "$employeeId", name: { $first: "$employee.name" }, dept: { $first: "$employee.dept" }, months: { $sum: 1 }, gross: { $sum: "$calc.grossEarnings" }, deductions: { $sum: "$calc.totalDeductions" }, net: { $sum: "$netPay" } } },
-        { $sort: { _id: 1 } },
-      ]);
+      // Amounts are encrypted in MongoDB → load the rows and add them up here.
+      const list = await FmsPayrollEntry.find(entryFilter({ month: { $in: fyRange(p.fy).months }, status: { $in: ["Finalized", "Disbursed"] } }))
+        .select("month employeeId employee calc netPay").sort({ month: 1 }).lean();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c = (e: any) => (e.calc ?? {}) as { grossEarnings?: number; totalDeductions?: number };
+      type Agg = { _id: string; name?: string; dept?: string; employees: number; months: number; gross: number; deductions: number; net: number };
+      const groups = new Map<string, Agg>();
+      for (const e of list) {
+        const k = type === "yearly-salary" ? e.month : e.employeeId;
+        const g = groups.get(k) ?? { _id: k, name: e.employee?.name ?? undefined, dept: e.employee?.dept ?? undefined, employees: 0, months: 0, gross: 0, deductions: 0, net: 0 };
+        g.employees++; g.months++;
+        g.gross += c(e).grossEarnings ?? 0;
+        g.deductions += c(e).totalDeductions ?? 0;
+        g.net += typeof e.netPay === "number" ? e.netPay : 0;
+        groups.set(k, g);
+      }
+      const agg = [...groups.values()].sort((a, b) => a._id.localeCompare(b._id));
       return type === "yearly-salary"
         ? {
             title: `Yearly Salary Report — FY ${p.fy} (Finalized/Disbursed payroll)`,
@@ -159,12 +217,34 @@ export async function reportToXlsx(r: Report): Promise<Buffer> {
   ws.addRow([]);
   const head = ws.addRow(r.columns.map((c) => c.label));
   head.font = { bold: true };
+  head.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  head.height = 32;
+  head.eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFB6D7A8" } };
+    cell.border = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } };
+  });
+  const first = ws.rowCount + 1;
   for (const row of r.rows) ws.addRow(r.columns.map((c) => (c.money ? rupees(row[c.key]) : (row[c.key] ?? ""))));
+  const last = ws.rowCount;
+  // totals row for money / number columns
+  if (r.rows.length > 1 && r.columns.some((c) => c.money)) {
+    const tot = ws.addRow(r.columns.map((c, i) => {
+      if (i === 0) return "TOTAL";
+      if (!c.money && !c.num) return "";
+      const L = ws.getColumn(i + 1).letter;
+      return { formula: `SUM(${L}${first}:${L}${last})` };
+    }));
+    tot.font = { bold: true };
+    tot.eachCell((cell) => { cell.border = { top: { style: "thin" } }; });
+  }
   r.columns.forEach((c, i) => {
     const col = ws.getColumn(i + 1);
-    col.width = Math.max(10, c.label.length + 4);
+    const longest = Math.max(...r.rows.slice(0, 200).map((row) => String(row[c.key] ?? "").length), 0);
+    col.width = Math.min(40, Math.max(12, c.money ? 14 : 0, Math.min(c.label.length, 22) + 2, longest + 2));
     if (c.money) col.numFmt = "₹#,##0.00";
   });
+  ws.views = [{ state: "frozen", ySplit: 3, xSplit: 1 }];
+  if (r.rows.length) ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: last, column: r.columns.length } };
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 

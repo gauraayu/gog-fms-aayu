@@ -1,6 +1,6 @@
 import { connectDB } from "./db";
-import { FmsEmailLog, FmsPayrollEntry, FmsPayrollRun, FmsPayslip, FmsSalaryStructure, FmsTransaction } from "@/models/fms";
-import { renderSlipPdf, payslipEmailBody, amountInWords, slipMoney, LOGO_DATA_URI, logoBuffer, type SlipData } from "./payslip-template";
+import { FmsEmailLog, FmsPayrollEntry, FmsPayrollRun, FmsPayslip, FmsSalaryStructure } from "@/models/fms";
+import { renderSlipPdf, payslipEmailBody, amountInWords, slipMoney, dMonY, LOGO_DATA_URI, logoBuffer, SLIP_DESIGN, type SlipData } from "./payslip-template";
 import { putObject, buildKey, getObjectBuffer } from "./s3";
 import { sendFmsMail, isValidRecipient } from "./fms-mail";
 import { getEmployeePayslipDetails } from "./oms-read";
@@ -13,11 +13,6 @@ import type { PayableDaysResult } from "./payable-days";
 type Actor = { employeeId: string; name: string; role: string } | null;
 const PAYSLIP_READY = ["Finalized", "Disbursed"];
 
-const dmy = (ymd?: string) => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd ?? "");
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
-};
-
 /**
  * Build the exact data printed on the salary slip.
  * Design: "With EPF" when the employee has any EPF / PT / TDS / other deduction / college-paid amount,
@@ -27,29 +22,26 @@ const dmy = (ymd?: string) => {
 export async function buildSlipData(entry: any, month: string): Promise<SlipData> {
   const c = entry.calc as SalaryCalc;
   const a = (entry.attendance ?? {}) as Partial<PayableDaysResult>;
-  const [oms, structure, txn] = await Promise.all([
+  const [oms, structure] = await Promise.all([
     getEmployeePayslipDetails(entry.employeeId),
     entry.structureId ? FmsSalaryStructure.findById(entry.structureId).lean() : null,
-    FmsTransaction.findOne({ type: "SALARY_DISBURSEMENT", month, employeeId: entry.employeeId }).select("disbursedOn").lean(),
   ]);
   const st = (structure?.statutory ?? {}) as { uan?: string; pfAccountNo?: string; esiNumber?: string; pran?: string; pan?: string; taxRegime?: string };
   const emp = entry.employee ?? {};
   const money = slipMoney(c);
   const [y, m] = month.split("-");
   return {
+    design: SLIP_DESIGN,
     template: money.template,
     month,
     monthTitle: `${FULL_MONTH[Number(m) - 1]} ${y}`,
-    monthYear: `${m} / ${y}`,
     employee: {
       name: oms?.name || emp.name || "",
       id: entry.employeeId,
       designation: oms?.designation || emp.designation || "",
       department: oms?.department || emp.dept || "",
       location: oms?.location || emp.location || "",
-      joiningDate: dmy(oms?.joiningDate),
-      bankName: oms?.bankName || "",
-      bankAccount: oms?.bankAccount || "",
+      joiningDate: dMonY(oms?.joiningDate),
       pan: (st.pan || oms?.pan || "").toUpperCase(),
       uan: st.uan || "",
       pfAccountNo: st.pfAccountNo || "",
@@ -57,9 +49,7 @@ export async function buildSlipData(entry: any, month: string): Promise<SlipData
       pran: st.pran || "",
       taxRegime: st.taxRegime || "Regular",
     },
-    paymentDate: dmy(txn?.disbursedOn),
-    paymentMode: "Bank Transfer",
-    days: { total: c.calendarDays ?? a.calendarDays ?? 0, payable: c.payableDays, paidLeave: a.paidLeaveDays ?? 0, present: a.presentDays ?? 0 },
+    days: { payable: c.payableDays, paidLeave: a.paidLeaveDays ?? 0 },
     earnings: money.earnings,
     deductions: money.deductions,
     net: money.net,
@@ -74,9 +64,10 @@ export async function generatePayslipsForMonth(month: string, actor: Actor, empl
   const run = await FmsPayrollRun.findOne({ month }).lean();
   if (!run) throw new HttpError(404, "No payroll for this month");
   // Per employee: only employees whose payroll is Finalized / Disbursed get a payslip.
-  const filter: Record<string, unknown> = { runId: run._id, excluded: { $ne: true }, calc: { $ne: null }, status: { $in: PAYSLIP_READY } };
+  // `calc` is encrypted in MongoDB, so "has a salary calculation" is checked here, not in the query.
+  const filter: Record<string, unknown> = { runId: run._id, excluded: { $ne: true }, status: { $in: PAYSLIP_READY } };
   if (employeeIds?.length) filter.employeeId = { $in: employeeIds };
-  const entries = await FmsPayrollEntry.find(filter).lean();
+  const entries = (await FmsPayrollEntry.find(filter).lean()).filter((e) => e.calc != null);
   if (!entries.length) throw new HttpError(409, "No Finalized employee to generate a payslip for — finalize the employee's payroll first");
   const results: { employeeId: string; ok: boolean; template?: string; error?: string }[] = [];
   for (const e of entries) {
@@ -107,13 +98,9 @@ export async function buildPayslipEmail(employeeId: string, month: string) {
   if (!st || !PAYSLIP_READY.includes(st.status ?? "")) throw new HttpError(409, "This employee's payroll is not finalized");
   const slip = await FmsPayslip.findOne({ employeeId, month }).lean();
   if (!slip) throw new HttpError(404, "Payslip not generated yet");
-  const entry = await FmsPayrollEntry.findOne({ month, employeeId }).lean();
-  // Normally the exact generated data is stored with the payslip. If it is missing (older payslip), rebuild it from the finalized payroll.
-  let data = slip.data as SlipData | undefined;
-  if (!data) {
-    if (!entry?.calc) throw new HttpError(409, "Payslip data is missing — click Generate again");
-    data = await buildSlipData(entry, month);
-  }
+  if (!slip.data || (slip.data as { design?: number }).design !== SLIP_DESIGN) throw new HttpError(409, "This payslip was made with the old design — click Generate again to use the new salary slip design");
+  const entry = await FmsPayrollEntry.findOne({ month, employeeId }).select("employee").lean();
+  const data = slip.data as SlipData;
   const to = String((entry?.employee as { email?: string } | undefined)?.email ?? "");
   const log = await FmsEmailLog.findOne({ key: `payslip:${employeeId}:${month}` }).select("status sentAt").lean();
   return {

@@ -16,15 +16,22 @@ export const GET = handle(async (req: Request) => {
     const re = { $regex: escapeRe(search), $options: "i" };
     filter.$or = [{ employeeId: re }, { employeeName: re }, { to: re }];
   }
-  const [rows, months] = await Promise.all([
+  const [rows, sent] = await Promise.all([
     FmsEmailLog.find(filter)
       .select("employeeId employeeName month to subject netPay sentAt sentVersion sentByName sentHistory.at sentHistory.version sentHistory.to")
       .sort({ month: -1, employeeName: 1 }).limit(2000).lean(),
-    FmsEmailLog.aggregate([
-      { $match: { kind: "PAYSLIP", status: "Sent" } },
-      { $group: { _id: "$month", count: { $sum: 1 }, total: { $sum: { $ifNull: ["$netPay", 0] } }, lastSentAt: { $max: "$sentAt" } } },
-      { $sort: { _id: -1 } },
-    ]),
+    FmsEmailLog.find({ kind: "PAYSLIP", status: "Sent" }).select("month netPay sentAt").lean(),
   ]);
-  return NextResponse.json({ rows, months: months.map((m) => ({ month: m._id, count: m.count, total: m.total, lastSentAt: m.lastSentAt })) });
+  // netPay is encrypted in MongoDB → month totals are added up here
+  const byMonth = new Map<string, { month: string; count: number; total: number; lastSentAt: Date | null }>();
+  for (const l of sent) {
+    const k = String(l.month ?? "");
+    const m = byMonth.get(k) ?? { month: k, count: 0, total: 0, lastSentAt: null };
+    m.count++;
+    m.total += typeof l.netPay === "number" ? l.netPay : 0;
+    if (l.sentAt && (!m.lastSentAt || l.sentAt > m.lastSentAt)) m.lastSentAt = l.sentAt;
+    byMonth.set(k, m);
+  }
+  const months = [...byMonth.values()].sort((a, b) => b.month.localeCompare(a.month));
+  return NextResponse.json({ rows, months });
 });

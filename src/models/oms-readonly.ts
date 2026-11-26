@@ -43,6 +43,11 @@ export const OmsWfh = readOnlyModel("OmsWfh", "workfromhomes");
 export const OmsPayableCorrection = readOnlyModel("OmsPayableCorrection", "payablecorrections");
 export const OmsFlagRemoval = readOnlyModel("OmsFlagRemoval", "flagremovals");
 export const OmsLocationJustification = readOnlyModel("OmsLocationJustification", "locationjustifications");
+// Added for the OMS rules of 04/11/2026 (Late justification on-hold, Full Attire fines, HR ₹ penalties)
+export const OmsLateJustification = readOnlyModel("OmsLateJustification", "latejustifications");
+export const OmsFullAttireReview = readOnlyModel("OmsFullAttireReview", "fullattirereviews");
+export const OmsFullAttireSubmission = readOnlyModel("OmsFullAttireSubmission", "fullattiresubmissions");
+export const OmsHrMonetaryPenalty = readOnlyModel("OmsHrMonetaryPenalty", "hrmonetarypenalties");
 
 /** Fields FMS is allowed to read from `employees` (never password / ID numbers / bank details). */
 export const EMPLOYEE_SAFE_FIELDS =

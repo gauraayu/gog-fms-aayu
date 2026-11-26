@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { clientIp, handle, HttpError, readJson, requireUser } from "@/lib/auth";
-import { getPermissionOverrides, getPolicy, setSetting } from "@/lib/settings";
+import { getPermissionOverrides, getPolicy, getSalaryDefaults, setSetting } from "@/lib/settings";
+import { mergeSalaryDefaults, type SalaryDefaults } from "@/lib/salary-structure";
 import { mergePolicy, validatePolicy, type PayrollPolicy } from "@/lib/policy";
 import { ALL_PERMISSIONS, DEFAULT_MATRIX, FMS_ROLES, PERMISSIONS, resolvePermissions } from "@/lib/permissions";
 import { audit } from "@/lib/audit";
 
 export const GET = handle(async () => {
   await requireUser("settings.manage");
-  const [policy, overrides] = await Promise.all([getPolicy(), getPermissionOverrides()]);
+  const [policy, overrides, salaryDefaults] = await Promise.all([getPolicy(), getPermissionOverrides(), getSalaryDefaults()]);
   return NextResponse.json({
     policy,
+    salaryDefaults,
     permissions: Object.fromEntries(FMS_ROLES.map((r) => [r, resolvePermissions(r, overrides)])),
     defaults: DEFAULT_MATRIX,
     catalog: PERMISSIONS,
@@ -19,7 +21,7 @@ export const GET = handle(async () => {
 /** PUT { policy?: Partial<PayrollPolicy>, confirm?: boolean, permissions?: Record<role, string[]>, reason } */
 export const PUT = handle(async (req: Request) => {
   const user = await requireUser("settings.manage");
-  const b = await readJson<{ policy?: Partial<PayrollPolicy>; confirm?: boolean; permissions?: Record<string, string[]>; reason?: string }>(req);
+  const b = await readJson<{ policy?: Partial<PayrollPolicy>; confirm?: boolean; permissions?: Record<string, string[]>; salaryDefaults?: Partial<SalaryDefaults>; reason?: string }>(req);
   const reason = String(b.reason ?? "").trim();
   if (reason.length < 5) throw new HttpError(400, "Reason is required for settings changes");
   const ip = await clientIp();
@@ -41,11 +43,19 @@ export const PUT = handle(async (req: Request) => {
     await audit(user, "settings.policy", { entity: "settings", entityId: "payrollPolicy", previousValue: before, updatedValue: next, reason, ip });
   }
 
+  if (b.salaryDefaults) {
+    // amounts arrive in paise (the page converts ₹ → paise)
+    const before = await getSalaryDefaults();
+    const next = mergeSalaryDefaults({ ...before, ...b.salaryDefaults });
+    await setSetting("salaryDefaults", next, user.employeeId);
+    await audit(user, "settings.salary_defaults", { entity: "settings", entityId: "salaryDefaults", previousValue: before, updatedValue: next, reason, ip });
+  }
+
   if (b.permissions) {
     const before = await getPermissionOverrides();
     const clean: Record<string, string[]> = {};
     for (const role of FMS_ROLES) {
-      if (role === "FMS_ADMIN" || role === "FOUNDER") continue; // full-access roles are not editable
+      if (role === "FMS_ADMIN") continue;
       const list = b.permissions[role];
       if (Array.isArray(list)) clean[role] = list.filter((p) => (ALL_PERMISSIONS as string[]).includes(p));
     }

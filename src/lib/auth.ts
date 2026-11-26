@@ -102,6 +102,7 @@ export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response
       if (e instanceof HttpError) return NextResponse.json({ error: e.message }, { status: e.status });
       const err = e as { name?: string; code?: number | string; message?: string; syscall?: string };
       if (err?.name === "DbNotConfigured") return NextResponse.json({ error: err.message }, { status: 503 });
+      if (err?.name === "DataKeyError") { console.error("[FMS]", err.message); return NextResponse.json({ error: err.message }, { status: 503 }); }
       if (
         err?.name === "MongooseServerSelectionError" || err?.name === "MongoServerSelectionError" ||
         err?.syscall === "querySrv" || ["ECONNREFUSED", "ENOTFOUND", "ETIMEOUT", "ETIMEDOUT"].includes(String(err?.code))

@@ -3,6 +3,8 @@ import { computePayableDays, type PayableDaysResult } from "./payable-days";
 import { computeSalary, pickStructure, type AdjustmentMap, type SalaryCalc, type SalaryStructureLite } from "./payroll-calc";
 import { holidaysFor, loadMonthInputs, type OmsEmployeeView } from "./oms-read";
 import { FmsAdjustment, FmsSalaryStructure } from "@/models/fms";
+import { HttpError } from "./auth";
+import { getSalaryDefaults } from "./settings";
 import type { PayrollPolicy } from "./policy";
 import { monthEnd, todayIST } from "./dates";
 
@@ -32,6 +34,10 @@ export async function loadAdjustments(employeeIds: string[], month: string) {
   type Row = (typeof rows)[number];
   const map = new Map<string, Map<string, { row: Row; systemValueAtEdit: number }>>();
   for (const r of rows) {
+    // Encrypted text here means the server is still running code from before encryption → stop, don't guess.
+    if ([r.originalValue, r.updatedValue, r.systemValue].some((v) => typeof v === "string")) {
+      throw new HttpError(503, "Salary data could not be read (encrypted values). Stop the FMS server completely and start it again (npm run dev), then reload.");
+    }
     const m = map.get(r.employeeId) ?? new Map();
     const prev = m.get(r.field);
     const sv = typeof r.systemValue === "number" ? r.systemValue : prev?.systemValueAtEdit ?? r.originalValue;
@@ -65,7 +71,7 @@ export async function computeForEmployees(
 ): Promise<EmployeeMonthResult[]> {
   await connectDB();
   const ids = employees.map((e) => e.id);
-  const [inputs, adjMap, structMap] = await Promise.all([loadMonthInputs(ids, month), loadAdjustments(ids, month), loadStructures(ids)]);
+  const [inputs, adjMap, structMap, salaryDefaults] = await Promise.all([loadMonthInputs(ids, month), loadAdjustments(ids, month), loadStructures(ids), getSalaryDefaults()]);
   // OMS rule: current month → asOf = today (later days "Upcoming", projected payable); past month → final.
   void mode;
 
@@ -81,8 +87,10 @@ export async function computeForEmployees(
       },
       attendance: inputs.attendance.get(employee.id) ?? [],
       leaves: inputs.leaves.get(employee.id) ?? [],
-      holidays: holidaysFor(inputs.holidays, employee.location),
+      holidays: holidaysFor(inputs.holidays, employee.location, employee.id),
       violations: inputs.violations.get(employee.id) ?? [],
+      lateJustificationPending: inputs.lateJustificationPending.get(employee.id),
+      fullAttire: inputs.fullAttire.get(employee.id) ?? [],
       removed: inputs.removed.get(employee.id) ?? new Map(),
       corrections: inputs.corrections.get(employee.id) ?? new Map(),
       monetaryPenalties: inputs.monetary.get(employee.id) ?? [],
@@ -96,7 +104,7 @@ export async function computeForEmployees(
     for (const [field, { row, systemValueAtEdit }] of adjRows) {
       if (OMS_DERIVED_FIELDS.has(field)) {
         const omsNow = systemValueFor(field, attendance);
-        if (round2(omsNow) !== round2(systemValueAtEdit)) {
+        if (Number.isFinite(systemValueAtEdit) && round2(omsNow) !== round2(systemValueAtEdit)) {
           // HR changed the underlying data in OMS after this FMS edit → the fresh OMS value applies.
           adjustmentsSuperseded.push({ field, adjustedTo: row.updatedValue, omsAtEdit: systemValueAtEdit, omsNow, adjustmentId: row._id });
           continue;
@@ -106,7 +114,7 @@ export async function computeForEmployees(
       adjustmentsApplied.push({ field, from: row.originalValue, to: row.updatedValue, adjustmentId: row._id });
     }
     const structure = pickStructure(structMap.get(employee.id) ?? [], month);
-    const calc = structure ? computeSalary({ structure, attendance, adjustments, policy }) : null;
+    const calc = structure ? computeSalary({ structure, attendance, adjustments, policy, salaryDefaults }) : null;
     const flags = [...attendance.flags, ...(calc?.flags ?? [])];
     if (!structure) flags.push("NO_SALARY_STRUCTURE");
     if (adjustmentsApplied.length) flags.push("HR_ADJUSTED");

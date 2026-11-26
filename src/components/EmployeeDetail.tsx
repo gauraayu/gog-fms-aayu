@@ -147,6 +147,44 @@ export function EmployeeDetail({ employeeId, month, onClose, onChanged }: { empl
 
           {tab === "salary" && c && (
             <div className="space-y-3">
+              {c.adjustedPayable !== undefined && (() => {
+                const configured = c.fullMonthly.basic + c.fullMonthly.hra + c.fullMonthly.otherAllowances;
+                const col = c.college ?? { configured: 0, payable: 0 };
+                const EPF_MODE: Record<string, string> = { AUTO_FIXED: "Auto · fixed (≥ threshold)", AUTO_PERCENT: "Auto · % of adjusted", FIXED: "Manual · fixed", PERCENT: "Manual · %", NONE: "—" };
+                const TDS_MODE: Record<string, string> = { AUTO: "Auto · % of adjusted", AUTO_BELOW_LIMIT: "Auto · below limit (₹0)", MANUAL: "Manual", NONE: c.epfApplicable ? "Not applied (EPF employee)" : "—" };
+                const rows: [string, string][] = [
+                  ["Configured Monthly Salary", formatINR(configured)],
+                  ["Company Contribution (configured)", formatINR(configured - col.configured)],
+                  ["College Contribution (configured → this month)", col.configured ? `${formatINR(col.configured)} → ${formatINR(col.payable)}` : "—"],
+                  ["Payable Days / Calendar Days", `${c.payableDays} / ${c.calendarDays}`],
+                  ["Paid / Unpaid Leave", a ? `${a.paidLeaveDays} / ${a.unpaidLeaveDays}` : "—"],
+                  ["LOP Days · Penalty Days", `${c.lopDays} · ${c.penaltyDays}`],
+                  ["LOP Amount", formatINR(c.deductions.lop)],
+                  ["Penalties", formatINR(c.deductions.penalties)],
+                  ["Adjusted Monthly Payable", formatINR(c.adjustedPayable)],
+                  ["EPF Applicable", c.epfApplicable ? "Yes" : "No"],
+                  ["EPF Mode", EPF_MODE[c.epfMode] ?? c.epfMode],
+                  ["Employee EPF", formatINR(c.deductions.epf)],
+                  ["Employer EPF (company cost, not deducted)", formatINR(c.employerEpf ?? 0)],
+                  ["TDS", `${formatINR(c.deductions.tds)} · ${TDS_MODE[c.tdsMode] ?? c.tdsMode}`],
+                  ["PT", formatINR(c.deductions.pt)],
+                  ["Other Deductions", formatINR(c.deductions.other)],
+                  ["Final Net (paid by GOG)", formatINR(c.netPay)],
+                  ["Employee receives in total (GOG + College)", formatINR(c.netPay + col.payable)],
+                ];
+                return (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Payroll summary — EPF / TDS decided on the adjusted payable salary</div>
+                    <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1">
+                      {rows.map(([l, v]) => (
+                        <div key={l} className={`flex justify-between text-[12px] ${l.startsWith("Adjusted") || l.startsWith("Final") ? "font-bold text-emerald-300" : "text-zinc-300"}`}>
+                          <span className="text-zinc-500">{l}</span><span className="tabular-nums">{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="grid sm:grid-cols-2 gap-3">
                 <Table head={<tr><th className={th}>Earnings</th><th className={`${th} text-right`}>Amount</th></tr>}>
                   {[["Basic", c.fullMonthly.basic], ["HRA", c.fullMonthly.hra], ["Allowances", c.fullMonthly.otherAllowances], ["Other Earnings", c.earnings.otherEarnings], ["Gross Earnings", c.grossEarnings]].map(([l, v]) => (

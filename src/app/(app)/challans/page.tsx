@@ -6,7 +6,7 @@ import { api, openSigned, qs } from "@/lib/client";
 import { formatINR } from "@/lib/money";
 import { fyRange, monthLabel } from "@/lib/dates";
 import { useAuth } from "@/components/AuthContext";
-import { Badge, Button, Card, Field, Input, Modal, Notice, Page, PageHeader, Select, Spinner, Stat, Textarea } from "@/components/ui";
+import { Badge, Button, Card, Field, Input, Modal, Notice, Page, PageHeader, Select, Spinner, Stat, Textarea, FileInput } from "@/components/ui";
 
 const TYPES = ["EPF", "GST", "PT", "TDS"] as const;
 interface Challan { _id: string; type: string; month: number; year: number; financialYear: string; referenceNumber?: string; amount: number; paymentDate?: string; paymentStatus: string; fileName?: string; versions?: { fileName?: string; replacedAt: string; replacedBy: string; reason: string }[] }
@@ -96,7 +96,7 @@ export default function ChallansPage() {
               <Field label="Challan reference no."><Input name="referenceNumber" /></Field>
               <Field label="Payment date"><Input type="date" name="paymentDate" /></Field>
             </div>
-            <Field label="Document (PDF/PNG/JPG ≤10 MB)"><input type="file" name="file" required accept="application/pdf,image/png,image/jpeg" className="text-xs text-zinc-400" /></Field>
+            <Field label="Document (PDF/PNG/JPG ≤10 MB)"><FileInput name="file" required accept="application/pdf,image/png,image/jpeg" /></Field>
             <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setUpload(null)}>Cancel</Button><Button type="submit" loading={busy}>Upload</Button></div>
           </form>
         )}
@@ -111,7 +111,7 @@ export default function ChallansPage() {
               <Field label="Reference no."><Input name="referenceNumber" defaultValue={edit.referenceNumber} /></Field>
               <Field label="Payment date"><Input type="date" name="paymentDate" defaultValue={edit.paymentDate} /></Field>
             </div>
-            <Field label="Replace document (optional — old version is kept)"><input type="file" name="file" accept="application/pdf,image/png,image/jpeg" className="text-xs text-zinc-400" /></Field>
+            <Field label="Replace document (optional — old version is kept)"><FileInput name="file" accept="application/pdf,image/png,image/jpeg" /></Field>
             <Field label="Reason (audited)"><Textarea name="reason" required minLength={5} /></Field>
             <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setEdit(null)}>Cancel</Button><Button type="submit" loading={busy}>Save</Button></div>
           </form>

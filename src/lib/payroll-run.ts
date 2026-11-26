@@ -1,6 +1,6 @@
 import type { Types } from "mongoose";
 import { connectDB } from "./db";
-import { FmsPayrollEntry, FmsPayrollRun, FmsTransaction, PAYROLL_STATUSES } from "@/models/fms";
+import { FmsEmailLog, FmsPayrollEntry, FmsPayrollRun, FmsPayslip, FmsTransaction, PAYROLL_STATUSES } from "@/models/fms";
 import { listEmployees, getEmployee } from "./oms-read";
 import { computeForEmployees, type EmployeeMonthResult } from "./payroll-service";
 import { getPolicy } from "./settings";
@@ -228,6 +228,8 @@ export const TRANSITIONS: Record<string, { from: string[]; to: string; perm: Per
   reopen: { from: ["Under Review"], to: "Draft", perm: "payroll.prepare", label: "Back to Draft" },
   approve: { from: ["Under Review"], to: "Approved", perm: "payroll.approve", label: "Approve" },
   reject: { from: ["Approved"], to: "Under Review", perm: "payroll.approve", label: "Send Back" },
+  // HR can pull an Approved / Finalized employee (NOT yet disbursed) back to Draft to correct it — a note is mandatory; the normal review → approve → finalize flow then repeats.
+  recall: { from: ["Approved", "Finalized"], to: "Draft", perm: "payroll.prepare", label: "Recall to Draft (edit)" },
   finalize: { from: ["Approved"], to: "Finalized", perm: "payroll.finalize", label: "Finalize" },
   disburse: { from: ["Finalized"], to: "Disbursed", perm: "payroll.disburse", label: "Disburse" },
 };
@@ -254,7 +256,8 @@ export async function transitionEntries(
   const single = Array.isArray(extra.employeeIds) && extra.employeeIds.length > 0;
   const ids = single ? extra.employeeIds!.map(String).slice(0, 1000) : null;
 
-  if (["reject", "reopen"].includes(action) && !(extra.note && extra.note.trim().length >= 5)) {
+  if (action === "recall" && !single) throw new HttpError(400, "Recall works one employee at a time — pick the employee");
+  if (["reject", "reopen", "recall"].includes(action) && !(extra.note && extra.note.trim().length >= 5)) {
     throw new HttpError(400, "A note is required");
   }
   if (action === "disburse") {
@@ -268,6 +271,17 @@ export async function transitionEntries(
   }
   if (action === "approve" && run.computedBy === actor.employeeId && !["FOUNDER", "FMS_ADMIN"].includes(actor.role)) {
     throw new HttpError(409, "Maker-checker: the person who calculated payroll cannot approve it");
+  }
+
+  if (action === "recall") {
+    // Safety: never recall money that was already paid, or a payslip the employee already received.
+    const rid = ids![0];
+    const [paid, sent] = await Promise.all([
+      FmsTransaction.findOne({ type: "SALARY_DISBURSEMENT", month, employeeId: rid }).select("_id").lean(),
+      FmsEmailLog.findOne({ key: `payslip:${rid}:${month}`, status: "Sent" }).select("_id").lean(),
+    ]);
+    if (paid) throw new HttpError(409, "Salary is already disbursed for this employee — it cannot be recalled");
+    if (sent) throw new HttpError(409, "The payslip was already emailed to this employee — it cannot be recalled");
   }
 
   // Re-check OMS first so nobody approves / finalizes numbers that changed since.
@@ -335,6 +349,10 @@ export async function transitionEntries(
     }
   }
 
+  if (action === "recall" && moved.length) {
+    // Old payslip (not emailed) no longer matches the numbers about to change — remove it; it is generated again after re-finalizing.
+    await FmsPayslip.deleteMany({ month, employeeId: { $in: moved.map((e) => e.employeeId) } });
+  }
   await refreshTotals(run._id);
 
   const scope = ids ? (ids.length === 1 ? `employee ${ids[0]}` : `${moved.length} selected employees`) : `all (${moved.length})`;

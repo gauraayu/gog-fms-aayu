@@ -6,15 +6,17 @@ import { api } from "@/lib/client";
 import { useAuth } from "@/components/AuthContext";
 import { Badge, Button, Card, Field, Input, Modal, Notice, Page, PageHeader, Select, Spinner, Table, Tabs, Textarea, td, th, tr } from "@/components/ui";
 import type { PayrollPolicy } from "@/lib/policy";
+import type { SalaryDefaults } from "@/lib/salary-structure";
 
 interface Access { _id: string; employeeId: string; email: string; name: string; role: string; active: boolean; grantedBy?: string; revokedAt?: string }
-interface S { policy: PayrollPolicy; permissions: Record<string, string[]>; catalog: Record<string, string> }
-const ROLES = ["FOUNDER", "HR", "ACCOUNTS"];
+interface S { policy: PayrollPolicy; salaryDefaults?: SalaryDefaults; permissions: Record<string, string[]>; catalog: Record<string, string> }
+const ROLES = ["FMS_ADMIN", "FOUNDER", "HR", "ACCOUNTS"];
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"policy" | "access" | "perms">("policy");
+  const [tab, setTab] = useState<"policy" | "salary" | "access" | "perms">("policy");
+  const [sd, setSd] = useState<Record<string, string> | null>(null);
   const [s, setS] = useState<S | null>(null);
   const [p, setP] = useState<PayrollPolicy | null>(null);
   const [access, setAccess] = useState<Access[] | null>(null);
@@ -25,7 +27,7 @@ export default function SettingsPage() {
   const [grant, setGrant] = useState<null | { employeeId: string; role: string; active: boolean; reason: string; existing?: boolean }>(null);
 
   const load = useCallback(() => {
-    api<S>("/api/settings").then((d) => { setS(d); setP(d.policy); setPerms(d.permissions); }).catch((e) => setMsg({ k: "error", t: e.message }));
+    api<S>("/api/settings").then((d) => { setS(d); setP(d.policy); setPerms(d.permissions); if (d.salaryDefaults) setSd({ epfThreshold: String(d.salaryDefaults.epfThreshold / 100), epfAboveFixed: String(d.salaryDefaults.epfAboveFixed / 100), epfBelowPercent: String(d.salaryDefaults.epfBelowPercent), epfPercentBase: d.salaryDefaults.epfPercentBase, ptDefault: String(d.salaryDefaults.ptDefault / 100), tdsThreshold: String((d.salaryDefaults.tdsThreshold ?? 1000000) / 100), tdsPercent: String(d.salaryDefaults.tdsPercent ?? 2), pfEstablishmentCode: d.salaryDefaults.pfEstablishmentCode ?? "" }); }).catch((e) => setMsg({ k: "error", t: e.message }));
     api<{ rows: Access[] }>("/api/settings/access").then((d) => setAccess(d.rows)).catch(() => {});
   }, []);
   useEffect(load, [load]);
@@ -46,7 +48,7 @@ export default function SettingsPage() {
     <Page wide>
       <PageHeader title="Settings" subtitle="Payroll policy, FMS access and the permission matrix. Every change needs a reason and is audited." />
       {msg && <Notice kind={msg.k} onClose={() => setMsg(null)}>{msg.t}</Notice>}
-      <Tabs value={tab} onChange={setTab} items={[{ value: "policy", label: "Payroll Policy" }, { value: "access", label: "FMS Access" }, { value: "perms", label: "Permission Matrix" }]} />
+      <Tabs value={tab} onChange={setTab} items={[{ value: "policy", label: "Payroll Policy" }, { value: "salary", label: "Salary Defaults" }, { value: "access", label: "FMS Access" }, { value: "perms", label: "Permission Matrix" }]} />
 
       {!s || !p ? <Spinner /> : tab === "policy" ? (
         <Card title="Payroll policy" actions={p.confirmed ? <Badge tone="emerald">Confirmed by {p.confirmedBy}</Badge> : <Badge tone="amber">Not confirmed</Badge>}>
@@ -63,6 +65,28 @@ export default function SettingsPage() {
             <Field label="Reason (required)"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Policy approved in founders' meeting 28 Oct" /></Field>
             <Button variant="outline" loading={busy} disabled={reason.trim().length < 5} onClick={() => save({ policy: p }, "Policy saved (needs confirmation)")}>Save</Button>
             {canConfirm && <Button loading={busy} disabled={reason.trim().length < 5} onClick={() => save({ policy: p, confirm: true }, "Policy saved and confirmed")}><ShieldCheck size={12} /> Save & Confirm</Button>}
+          </div>
+        </Card>
+      ) : tab === "salary" ? (
+        <Card title="Salary structure defaults (company rules — not statutory)">
+          <Notice kind="warn">EPF “Auto” and TDS “Auto” are decided EVERY payroll month on the employee's adjusted payable salary (after attendance, LOP and penalties), using these numbers. PT “Default” pre-fills new structures. HR can switch any employee to a manual amount. Open (Draft / Under Review) payroll uses new numbers on the next recalculation; Approved / Finalized payroll never changes. Confirm EPF applicability, ceilings and the state PT slab with Accounts before production payroll.</Notice>
+          {sd && (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+              <Field label="EPF threshold — adjusted payable ₹ (this or more → fixed)"><Input type="number" min={0} value={sd.epfThreshold} onChange={(e) => setSd({ ...sd, epfThreshold: e.target.value })} /></Field>
+              <Field label="EPF at / above threshold — fixed ₹ / month"><Input type="number" min={0} value={sd.epfAboveFixed} onChange={(e) => setSd({ ...sd, epfAboveFixed: e.target.value })} /></Field>
+              <Field label="EPF below threshold — % of adjusted payable"><Input type="number" min={0} max={100} step="0.01" value={sd.epfBelowPercent} onChange={(e) => setSd({ ...sd, epfBelowPercent: e.target.value })} /></Field>
+              <Field label="EPF % is of"><Select value={sd.epfPercentBase} onChange={(e) => setSd({ ...sd, epfPercentBase: e.target.value })}><option value="GROSS">Monthly salary (gross)</option><option value="BASIC">Basic</option></Select></Field>
+              <Field label="Default Professional Tax ₹ / month"><Input type="number" min={0} value={sd.ptDefault} onChange={(e) => setSd({ ...sd, ptDefault: e.target.value })} /></Field>
+              <Field label="TDS auto (no EPF) — up to ₹ → no TDS"><Input type="number" min={0} value={sd.tdsThreshold} onChange={(e) => setSd({ ...sd, tdsThreshold: e.target.value })} /></Field>
+              <Field label="TDS auto (no EPF) — above that, %"><Input type="number" min={0} max={100} step="0.01" value={sd.tdsPercent} onChange={(e) => setSd({ ...sd, tdsPercent: e.target.value })} /></Field>
+              <Field label="Company PF code (pre-fills PF account numbers)" hint="State + office + establishment code (+ extension), e.g. RJJPR0012345000. HR then only adds each employee's member number.">
+                <Input value={sd.pfEstablishmentCode} placeholder="RJJPR0012345000" onChange={(e) => setSd({ ...sd, pfEstablishmentCode: e.target.value.toUpperCase().replace(/[\s/-]/g, "").slice(0, 22) })} />
+              </Field>
+            </div>
+          )}
+          <div className="mt-4 grid sm:grid-cols-[1fr_auto] gap-2 items-end">
+            <Field label="Reason (required)"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. EPF defaults approved by founders" /></Field>
+            <Button loading={busy} disabled={!sd || reason.trim().length < 5} onClick={() => sd && save({ salaryDefaults: { epfThreshold: Math.round(Number(sd.epfThreshold) * 100), epfAboveFixed: Math.round(Number(sd.epfAboveFixed) * 100), epfBelowPercent: Number(sd.epfBelowPercent), epfPercentBase: sd.epfPercentBase, ptDefault: Math.round(Number(sd.ptDefault) * 100), tdsThreshold: Math.round(Number(sd.tdsThreshold) * 100), tdsPercent: Number(sd.tdsPercent), pfEstablishmentCode: sd.pfEstablishmentCode } }, "Salary defaults saved")}>Save</Button>
           </div>
         </Card>
       ) : tab === "access" ? (
@@ -84,12 +108,12 @@ export default function SettingsPage() {
         </Card>
       ) : (
         <Card title="Permission matrix">
-          <p className="text-[11px] text-zinc-500 mb-3">Founder always has every permission. Changes take effect on the next request.</p>
-          <Table head={<tr><th className={th}>Permission</th>{ROLES.filter((r) => r !== "FOUNDER").map((r) => <th key={r} className={`${th} text-center`}>{r}</th>)}</tr>}>
+          <p className="text-[11px] text-zinc-500 mb-3">FMS_ADMIN always has every permission. Changes take effect on the next request.</p>
+          <Table head={<tr><th className={th}>Permission</th>{ROLES.filter((r) => r !== "FMS_ADMIN").map((r) => <th key={r} className={`${th} text-center`}>{r}</th>)}</tr>}>
             {Object.entries(s.catalog).map(([perm, label]) => (
               <tr key={perm} className={tr}>
                 <td className={td}><div className="text-white">{label}</div><div className="text-[10px] font-mono text-zinc-600">{perm}</div></td>
-                {ROLES.filter((r) => r !== "FOUNDER").map((r) => (
+                {ROLES.filter((r) => r !== "FMS_ADMIN").map((r) => (
                   <td key={r} className={`${td} text-center`}>
                     <input type="checkbox" aria-label={`${r} ${perm}`} checked={perms[r]?.includes(perm) ?? false}
                       onChange={(e) => setPerms((x) => ({ ...x, [r]: e.target.checked ? [...(x[r] ?? []), perm] : (x[r] ?? []).filter((y) => y !== perm) }))} />

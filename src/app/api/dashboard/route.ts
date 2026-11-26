@@ -28,46 +28,34 @@ export const GET = handle(async (req: Request) => {
   const chartMonths = lastNMonths(chartEnd, 6);
   const locF = location ? { location } : {};
 
-  const sumTx = async (from: string, to: string) => {
-    const r = await FmsTransaction.aggregate([
-      { $match: { type: "SALARY_DISBURSEMENT", disbursedOn: { $gte: from, $lte: to }, ...locF } },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
-    ]);
-    return r[0]?.total ?? 0;
-  };
+  // Amounts are encrypted in MongoDB → load the matching rows (decrypted by FMS) and add them up here.
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const sumTx = async (from: string, to: string) =>
+    (await FmsTransaction.find({ type: "SALARY_DISBURSEMENT", disbursedOn: { $gte: from, $lte: to }, ...locF }).select("amount").lean()).reduce((s, r) => s + num(r.amount), 0);
 
-  const [salaryFY, salaryPrev, employees, violationsAssessed, closedRuns, salarySeries, challanSeries] = await Promise.all([
+  const [salaryFY, salaryPrev, employees, violationsAssessed, closedRuns, chartTx, challans] = await Promise.all([
     sumTx(start, end),
     sumTx(`${prev}-01`, monthEnd(prev)),
     listEmployees({ policy, month: cur, location }).then((l) => l.length),
     OmsViolation.countDocuments({ hrStatus: "Approved for Payroll", period: { $in: fyMonths } }),
     FmsPayrollRun.find({ month: { $in: fyMonths } }).select("_id").lean(),
-    FmsTransaction.aggregate([
-      { $match: { type: "SALARY_DISBURSEMENT", disbursedOn: { $gte: `${chartMonths[0]}-01`, $lte: monthEnd(chartMonths[5]) }, ...locF } },
-      { $group: { _id: { $substrCP: ["$disbursedOn", 0, 7] }, total: { $sum: "$amount" } } },
-    ]),
-    FmsChallan.aggregate([
-      { $match: { type: { $in: ["EPF", "TDS", "GST"] }, paymentStatus: { $in: policy.challanPaidStatuses } } },
-      {
-        $project: {
-          type: 1, amount: 1,
-          ym: { $concat: [{ $toString: "$year" }, "-", { $cond: [{ $lt: ["$month", 10] }, { $concat: ["0", { $toString: "$month" }] }, { $toString: "$month" }] }] },
-        },
-      },
-      { $match: { ym: { $in: chartMonths } } },
-      { $group: { _id: { type: "$type", ym: "$ym" }, total: { $sum: "$amount" } } },
-    ]),
+    FmsTransaction.find({ type: "SALARY_DISBURSEMENT", disbursedOn: { $gte: `${chartMonths[0]}-01`, $lte: monthEnd(chartMonths[5]) }, ...locF }).select("disbursedOn amount").lean(),
+    FmsChallan.find({ type: { $in: ["EPF", "TDS", "GST"] }, paymentStatus: { $in: policy.challanPaidStatuses } }).select("type year month amount").lean(),
   ]);
 
-  const penAgg = closedRuns.length
-    ? await FmsPayrollEntry.aggregate([
-        { $match: { runId: { $in: closedRuns.map((r) => r._id) }, excluded: { $ne: true }, status: { $in: ["Finalized", "Disbursed"] }, ...(location ? { "employee.location": location } : {}) } },
-        { $group: { _id: null, total: { $sum: "$calc.deductions.penalties" } } },
-      ])
+  const penEntries = closedRuns.length
+    ? await FmsPayrollEntry.find({ runId: { $in: closedRuns.map((r) => r._id) }, excluded: { $ne: true }, status: { $in: ["Finalized", "Disbursed"] }, ...(location ? { "employee.location": location } : {}) }).select("calc").lean()
     : [];
+  const penaltiesTotal = penEntries.reduce((s, e) => s + num((e.calc as { deductions?: { penalties?: number } } | undefined)?.deductions?.penalties), 0);
 
-  const sal = new Map(salarySeries.map((s: { _id: string; total: number }) => [s._id, s.total]));
-  const ch = new Map(challanSeries.map((s: { _id: { type: string; ym: string }; total: number }) => [`${s._id.type}:${s._id.ym}`, s.total]));
+  const sal = new Map<string, number>();
+  for (const t of chartTx) { const m = String(t.disbursedOn).slice(0, 7); sal.set(m, (sal.get(m) ?? 0) + num(t.amount)); }
+  const ch = new Map<string, number>();
+  for (const c of challans) {
+    const ym = `${c.year}-${String(c.month).padStart(2, "0")}`;
+    if (!chartMonths.includes(ym)) continue;
+    ch.set(`${c.type}:${ym}`, (ch.get(`${c.type}:${ym}`) ?? 0) + num(c.amount));
+  }
   const series = (fn: (m: string) => number) => chartMonths.map((m) => ({ month: m, label: monthLabel(m), amount: fn(m) }));
 
   return NextResponse.json({
@@ -78,7 +66,7 @@ export const GET = handle(async (req: Request) => {
       salaryDisbursedPrevMonth: salaryPrev,
       prevMonth: prev,
       activeEmployees: employees,
-      penaltiesDeductedFY: penAgg[0]?.total ?? 0,
+      penaltiesDeductedFY: penaltiesTotal,
       violationsAssessedFY: violationsAssessed,
     },
     charts: {

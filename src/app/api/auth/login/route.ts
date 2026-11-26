@@ -9,6 +9,7 @@ import { createToken, cookieOptions, FMS_COOKIE } from "@/lib/session";
 import { clientIp, handle, readJson, HttpError } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { getPolicy } from "@/lib/settings";
+import { otpEnabled, startOtp } from "@/lib/login-otp";
 
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILS = 5;
@@ -98,6 +99,16 @@ export const POST = handle(async (req: Request) => {
   }
 
   await FmsLoginAttempt.create({ key: rlKey, success: true });
+
+  // 3) Email OTP (2nd step). The session is created only after /api/auth/otp/verify.
+  if (otpEnabled()) {
+    await audit({ employeeId: grant.employeeId, name: String(emp.name), role: grant.role }, "auth.otp_sent", { entity: "auth", ip });
+    return startOtp({
+      uid: String(emp._id), employeeId: grant.employeeId, email: String(emp.email ?? ""), name: String(emp.name ?? ""),
+      role: grant.role, accessSource: grant.source, ip,
+    });
+  }
+
   const token = createToken({ uid: String(emp._id), eid: grant.employeeId, email: String(emp.email), role: grant.role });
   await audit({ employeeId: grant.employeeId, name: String(emp.name), role: grant.role }, "auth.login", {
     entity: "auth", ip, updatedValue: { accessSource: grant.source, omsRole: emp.role },

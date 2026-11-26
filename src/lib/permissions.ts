@@ -35,9 +35,12 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
 
 export const DEFAULT_MATRIX: Record<FmsRole, Permission[]> = {
   FMS_ADMIN: ALL_PERMISSIONS,
-  FOUNDER: ALL_PERMISSIONS, // Founder has every permission (the separate FMS Admin role is retired)
+  FOUNDER: [
+    "dashboard.view", "employees.view", "salary.view", "payroll.view", "payroll.approve", "payroll.finalize",
+    "payslips.view", "invoices.view", "challans.view", "reports.view", "emails.view", "audit.view", "settings.manage",
+  ],
   HR: [
-    "dashboard.view", "employees.view", "salary.view", "adjustments.manage", "payroll.view", "payroll.prepare",
+    "dashboard.view", "employees.view", "salary.view", "salary.manage", "adjustments.manage", "payroll.view", "payroll.prepare",
     "payslips.view", "payslips.generate", "payslips.email", "reports.view", "emails.view", "audit.view",
   ],
   ACCOUNTS: [
@@ -48,7 +51,7 @@ export const DEFAULT_MATRIX: Record<FmsRole, Permission[]> = {
 };
 
 export function resolvePermissions(role: string, overrides?: Partial<Record<string, string[]>> | null): Permission[] {
-  if (role === "FOUNDER" || role === "FMS_ADMIN") return ALL_PERMISSIONS; // Founder (and legacy FMS_ADMIN) can never be locked out
+  if (role === "FMS_ADMIN") return ALL_PERMISSIONS; // admin can never lock itself out
   const fromOverride = overrides?.[role];
   const list = (fromOverride ?? DEFAULT_MATRIX[role as FmsRole] ?? []) as string[];
   return list.filter((p): p is Permission => p in PERMISSIONS);

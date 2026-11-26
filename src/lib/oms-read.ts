@@ -9,9 +9,10 @@ import { connectDB } from "./db";
 import {
   OmsEmployee, OmsAttendance, OmsLeave, OmsHoliday, OmsViolation, OmsExit, OmsLocation,
   OmsPayableCorrection, OmsFlagRemoval, OmsLocationJustification, EMPLOYEE_SAFE_FIELDS,
+  OmsLateJustification, OmsFullAttireReview, OmsFullAttireSubmission, OmsHrMonetaryPenalty,
 } from "@/models/oms-readonly";
 import { monthStart, monthEnd, todayIST } from "./dates";
-import type { FineRec, MonetaryPenalty, OmsCorrection, PdAttendance, PdLeave, PdViolation } from "./payable-days";
+import type { FineRec, MonetaryPenalty, OmsCorrection, PdAttendance, PdFullAttire, PdLeave, PdViolation } from "./payable-days";
 import type { PayrollPolicy } from "./policy";
 
 export interface OmsEmployeeView {
@@ -124,7 +125,11 @@ export interface MonthInputs {
   corrections: Map<string, Map<string, OmsCorrection>>;
   monetary: Map<string, MonetaryPenalty[]>;
   exits: Map<string, string>;
-  holidays: { date: string; forAll?: boolean; collegeIds?: string[] }[];
+  /** dates with a pending Late Justification, per employee */
+  lateJustificationPending: Map<string, Set<string>>;
+  /** rejected Full Attire reviews, per employee */
+  fullAttire: Map<string, PdFullAttire[]>;
+  holidays: { date: string; forAll?: boolean; collegeIds?: string[]; employeeIds?: string[]; excludedEmployeeIds?: string[] }[];
   /** OMS: asOf = today only for the current month */
   asOf?: string;
 }
@@ -173,13 +178,18 @@ export async function loadMonthInputs(employeeIds: string[], month: string): Pro
     OmsAttendance.find({ employeeId: ids, date: { $gte: start, $lte: end } })
       .select("_id employeeId date status clockIn clockOut workMode location dressCodeStatus dressCodeRejectionReasons").lean(),
     OmsLeave.find({ employeeId: ids, startDate: { $lte: end }, endDate: { $gte: start } }).select("employeeId id type leaveType startDate endDate days status").lean(),
-    OmsHoliday.find({ date: { $gte: start, $lte: end }, status: "Approved" }).select("date forAll collegeIds").lean(),
+    OmsHoliday.find({ date: { $gte: start, $lte: end }, status: "Approved" }).select("date forAll collegeIds employeeIds excludedEmployeeIds").lean(),
     OmsViolation.find({ employeeId: ids, date: { $gte: start, $lte: end } }).select("employeeId id date type level instance proposedDeduction hrStatus scheduledTime actualTime").lean(),
     OmsExit.find({ employeeId: ids }).select("employeeId lastWorkingDay").lean(),
     OmsFlagRemoval.find({ employeeId: ids, flagDate: { $gte: start, $lte: end } }).select("employeeId flagId removedAt removedByName removalReason").lean(),
     OmsPayableCorrection.find({ employeeId: ids, month, status: "ACTIVE" }).lean(),
   ]);
-  const locPen = await locationPenaltiesFor(employeeIds, start, end);
+  const [locPen, lj, fa, hrPen] = await Promise.all([
+    locationPenaltiesFor(employeeIds, start, end),
+    OmsLateJustification.find({ employeeId: ids, date: { $gte: start, $lte: end } }).select("employeeId date justificationStatus").lean(),
+    fullAttireFor(employeeIds, month),
+    OmsHrMonetaryPenalty.find({ employeeId: ids, month, status: "ACTIVE" }).select("id employeeId month date amount reasonCategory explanation").lean(),
+  ]);
   const k = (r: any) => String(r.employeeId);
 
   const V = group(viol as any[], k);
@@ -192,12 +202,27 @@ export async function loadMonthInputs(employeeIds: string[], month: string): Pro
   const C = new Map<string, Map<string, OmsCorrection>>();
   for (const [emp, list] of group(corr as any[], k)) {
     C.set(emp, new Map(list.map((c) => [c.date, {
-      id: c.id, direction: correctionDirection(c), correctionCategory: c.correctionCategory, correctionReason: c.correctionReason,
+      id: c.id, direction: correctionDirection(c), payableType: c.payableType ? String(c.payableType) : undefined, correctionCategory: c.correctionCategory, correctionReason: c.correctionReason,
       correctedByName: c.correctedByName, correctedByRole: c.correctedByRole, correctedAt: c.correctedAt, relatedTicketId: c.relatedTicketId,
     }])));
   }
   const monetary = new Map<string, MonetaryPenalty[]>();
-  for (const [emp, list] of locPen.money) monetary.set(emp, list.sort((a, b) => a.date.localeCompare(b.date)));
+  for (const [emp, list] of locPen.money) monetary.set(emp, [...list]);
+  // HR ₹ penalties (hrmonetarypenalties, ACTIVE, this month; empty date = for the whole month)
+  for (const r of hrPen as any[]) {
+    const emp = String(r.employeeId);
+    const list = monetary.get(emp) ?? [];
+    list.push({ id: r.id ? String(r.id) : undefined, date: r.date ? String(r.date) : "", amount: Number(r.amount) || 0, reason: r.explanation || r.reasonCategory || "", source: "HR Penalty", detail: r.date ? undefined : "Whole month" });
+    monetary.set(emp, list);
+  }
+  for (const [emp, list] of monetary) monetary.set(emp, list.sort((a, b) => a.date.localeCompare(b.date)));
+  const LJ = new Map<string, Set<string>>();
+  for (const r of lj as any[]) {
+    if (!/pending/i.test(String(r.justificationStatus || ""))) continue;
+    const emp = String(r.employeeId);
+    if (!LJ.has(emp)) LJ.set(emp, new Set());
+    LJ.get(emp)!.add(String(r.date));
+  }
 
   const lwd = new Map((exits as any[]).filter((x) => x.lastWorkingDay).map((x) => [String(x.employeeId), String(x.lastWorkingDay)]));
   const today = todayIST();
@@ -209,14 +234,53 @@ export async function loadMonthInputs(employeeIds: string[], month: string): Pro
     corrections: C,
     monetary,
     exits: lwd,
+    lateJustificationPending: LJ,
+    fullAttire: fa,
     holidays: hol as any[],
     asOf: month === today.slice(0, 7) ? today : undefined,
   };
 }
 
-/** OMS salary-module.ts:85 — holidays that apply to one employee. */
-export const holidaysFor = (hol: MonthInputs["holidays"], location?: string) =>
-  hol.filter((h) => h.forAll || !h.collegeIds?.length || (location && h.collegeIds.includes(location))).map((h) => h.date);
+/**
+ * OMS holidayForEmployee (src/lib/holiday-scope.ts) — holidays that apply to one employee:
+ * employeeIds set → only those people; else excludedEmployeeIds → not them;
+ * else forAll, or no collegeIds, or the employee's location is in collegeIds.
+ */
+export const holidaysFor = (hol: MonthInputs["holidays"], location?: string, employeeId?: string) =>
+  hol.filter((h) => {
+    if (h.employeeIds?.length) return !!employeeId && h.employeeIds.map(String).includes(employeeId);
+    if (employeeId && h.excludedEmployeeIds?.map(String).includes(employeeId)) return false;
+    return h.forAll || !h.collegeIds?.length || (!!location && h.collegeIds.includes(location));
+  }).map((h) => h.date);
+
+/** IST calendar day (YYYY-MM-DD) of a timestamp */
+export function istDay(v: unknown): string {
+  if (!v) return "";
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const t = new Date(v as string | number | Date).getTime();
+  if (Number.isNaN(t)) return "";
+  return new Date(t + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/** Rejected Full Attire reviews; date = IST day of fullattiresubmissions.submittedAt (not the review date). */
+async function fullAttireFor(ids: string[], month: string): Promise<Map<string, PdFullAttire[]>> {
+  const out = new Map<string, PdFullAttire[]>();
+  if (!ids.length) return out;
+  const reviews: any[] = await OmsFullAttireReview.find({ professorId: { $in: ids }, status: "rejected" }).select("id submissionId professorId reasons other").lean();
+  if (!reviews.length) return out;
+  const subs: any[] = await OmsFullAttireSubmission.find({ id: { $in: [...new Set(reviews.map((r) => r.submissionId).filter(Boolean))] } }).select("id submittedAt").lean();
+  const at = new Map(subs.map((s) => [String(s.id), istDay(s.submittedAt)]));
+  for (const r of reviews) {
+    const date = at.get(String(r.submissionId)) || "";
+    if (!date.startsWith(month)) continue;
+    const emp = String(r.professorId);
+    const reasons = [...(Array.isArray(r.reasons) ? r.reasons : []), r.other].filter(Boolean).join(", ");
+    const list = out.get(emp) ?? [];
+    list.push({ id: String(r.id), date, reasons: reasons || undefined });
+    out.set(emp, list);
+  }
+  return out;
+}
 
 /**
  * Extra OMS details printed on the salary slip (server-only; never returned by any list API).

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Send, CheckCircle2, Lock, Banknote, Undo2, Eye, Ban } from "lucide-react";
+import { RefreshCw, Send, CheckCircle2, Lock, Banknote, Undo2, Eye, Ban, Download } from "lucide-react";
 import { api } from "@/lib/client";
 import { formatINR } from "@/lib/money";
 import { monthLabel } from "@/lib/dates";
@@ -124,6 +124,11 @@ export default function PayrollPage() {
         actions={
           <>
             <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40" />
+            {run && can("salary.view") && (
+              <a href={`/api/reports?type=payroll-sheet&month=${month}&format=xlsx`} className="h-9 px-3 rounded-lg border border-zinc-700 text-xs font-semibold text-zinc-200 hover:text-white hover:border-zinc-500 inline-flex items-center gap-1.5" title="Excel with all salary columns for this month">
+                <Download size={12} /> Download Excel
+              </a>
+            )}
             {can("payroll.prepare") && anyOpen && (
               <Button loading={busy === "compute"} onClick={() => call("compute", () => api("/api/payroll/runs", { method: "POST", json: { month } }), () => (run ? "Draft / Under Review employees recalculated from latest OMS data" : "Payroll draft created"))}>
                 <RefreshCw size={12} /> {run ? "Recalculate" : "Calculate Payroll"}

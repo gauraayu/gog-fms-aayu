@@ -1,3 +1,4 @@
+import { stripDays } from "@/lib/field-crypto";
 import { NextResponse } from "next/server";
 import { can, handle, HttpError, readJson, requireUser } from "@/lib/auth";
 import { FmsPayrollEntry, FmsPayrollRun } from "@/models/fms";
@@ -13,7 +14,7 @@ export const GET = handle(async (_req: Request, ctx: { params: Promise<{ month: 
   const run = await FmsPayrollRun.findOne({ month }).lean();
   if (!run) return NextResponse.json({ run: null, entries: [] });
   const showSalary = can(user, "salary.view");
-  const entries = await FmsPayrollEntry.find({ runId: run._id }).select(showSalary ? "-attendance.days" : "-attendance.days -calc").sort({ "employee.name": 1 }).lean();
+  const entries = (await FmsPayrollEntry.find({ runId: run._id }).select(showSalary ? "" : "-calc").sort({ "employee.name": 1 }).lean()).map(stripDays);
   return NextResponse.json({ run, entries: showSalary ? entries : entries.map((e) => ({ ...e, netPay: null })) });
 });
 

@@ -4,8 +4,8 @@
  * FMS UI kit — re-implements the GOG OMS component patterns (handover §7)
  * inside the FMS codebase, so FMS changes can never affect OMS.
  */
-import { useEffect, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type SelectHTMLAttributes } from "react";
-import { Loader2, Inbox, X, CheckCircle2, AlertTriangle } from "lucide-react";
+import { useEffect, useId, useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type SelectHTMLAttributes } from "react";
+import { Loader2, Inbox, X, CheckCircle2, AlertTriangle, Upload } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 
@@ -86,6 +86,32 @@ export const inputCls = "h-9 w-full bg-zinc-950 border border-zinc-800 rounded-l
 
 export function Input(p: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...p} className={cn(inputCls, p.className)} />;
+}
+/**
+ * File picker styled like the other buttons. The real <input type="file"> stays inside the form
+ * (visually hidden), so FormData, `name` and `required` keep working.
+ */
+export function FileInput({ className, onChange, ...p }: Omit<InputHTMLAttributes<HTMLInputElement>, "type">) {
+  const [name, setName] = useState("");
+  const id = useId();
+  return (
+    <div className={cn("flex items-center gap-2 min-w-0", className)}>
+      <label
+        htmlFor={id}
+        className="shrink-0 cursor-pointer inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-zinc-700 bg-zinc-900 text-xs font-semibold text-zinc-200 hover:text-white hover:border-emerald-500/60 hover:bg-zinc-800 transition-colors focus-within:ring-2 focus-within:ring-emerald-500/40"
+      >
+        <Upload size={13} /> {name ? "Change file" : "Choose file"}
+      </label>
+      <span className={cn("text-xs truncate", name ? "text-zinc-200" : "text-zinc-500")} title={name}>{name || "No file selected"}</span>
+      <input
+        {...p}
+        id={id}
+        type="file"
+        className="sr-only"
+        onChange={(e) => { setName(e.target.files?.[0]?.name ?? ""); onChange?.(e); }}
+      />
+    </div>
+  );
 }
 export function Select({ children, ...p }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (

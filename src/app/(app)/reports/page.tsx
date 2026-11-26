@@ -9,7 +9,7 @@ import { Button, Card, Empty, Field, Input, Notice, Page, PageHeader, Select, Sp
 import type { Permission } from "@/lib/permissions";
 
 const TYPES: { value: string; label: string; needs: "month" | "fy"; perm: Permission }[] = [
-  { value: "monthly-salary", label: "Monthly Salary Report", needs: "month", perm: "salary.view" },
+  { value: "monthly-salary", label: "Monthly Salary Report (Payroll Sheet — same as Payroll Management)", needs: "month", perm: "salary.view" },
   { value: "yearly-salary", label: "Yearly Salary Report", needs: "fy", perm: "salary.view" },
   { value: "employee-payroll", label: "Employee Payroll Summary", needs: "fy", perm: "salary.view" },
   { value: "payable-days", label: "Payable Days, Leave & LOP", needs: "month", perm: "payroll.view" },
